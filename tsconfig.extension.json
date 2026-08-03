@@ -1,0 +1,10 @@
+{
+    "extends": "./tsconfig.base.json",
+    "include": ["src/extension", "src/lib"],
+    "compilerOptions": {
+        "lib": ["ES2020", "DOM"],
+        "noEmit": true,
+        "target": "ES2020",
+        "types": ["chrome", "node"]
+    }
+}

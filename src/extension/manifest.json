@@ -1,0 +1,28 @@
+{
+    "manifest_version": 3,
+    "name": "Paranoid Devnet Wallet",
+    "version": "0.1.0",
+    "description": "Disposable Solana devnet wallet for local Wallet Standard testing in Chromium browsers.",
+    "permissions": ["storage"],
+    "host_permissions": ["https://api.devnet.solana.com/*"],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_popup": "popup.html",
+        "default_title": "Paranoid Devnet Wallet"
+    },
+    "content_scripts": [
+        {
+            "matches": ["http://*/*", "https://*/*"],
+            "js": ["content.js"],
+            "run_at": "document_start"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": ["inpage.js"],
+            "matches": ["http://*/*", "https://*/*"]
+        }
+    ]
+}

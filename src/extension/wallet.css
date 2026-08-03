@@ -1,0 +1,91 @@
+:root {
+    color-scheme: dark;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: #0b0d0c;
+    color: #e7f7e9;
+}
+
+body {
+    margin: 0;
+    min-width: 360px;
+}
+
+main {
+    padding: 28px;
+}
+
+.eyebrow,
+.label {
+    color: #68f58a;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+h1 {
+    font-size: 24px;
+    line-height: 1.15;
+    margin: 12px 0 20px;
+}
+
+.origin,
+.address,
+li {
+    overflow-wrap: anywhere;
+}
+
+.origin,
+.address,
+.value,
+ul {
+    background: #151a17;
+    border: 1px solid #29332c;
+    border-radius: 6px;
+    padding: 14px;
+}
+
+ul {
+    list-style: none;
+    max-height: 220px;
+    overflow: auto;
+}
+
+li + li {
+    border-top: 1px solid #29332c;
+    margin-top: 9px;
+    padding-top: 9px;
+}
+
+.warning {
+    color: #ffce73;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 24px;
+}
+
+button {
+    background: #68f58a;
+    border: 0;
+    border-radius: 4px;
+    color: #081009;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 13px;
+}
+
+button.secondary {
+    background: #242b26;
+    color: #e7f7e9;
+}
+
+button:disabled {
+    cursor: wait;
+    opacity: 0.45;
+}

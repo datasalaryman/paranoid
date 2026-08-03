@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Paranoid approval</title>
+        <link rel="stylesheet" href="wallet.css" />
+    </head>
+    <body>
+        <main>
+            <p class="eyebrow">PARANOID / DEVNET ONLY</p>
+            <h1 id="title">Loading request...</h1>
+            <p id="origin" class="origin"></p>
+            <ul id="details"></ul>
+            <p class="warning">Disposable test key. Never fund this address with real assets.</p>
+            <div class="actions">
+                <button id="reject" class="secondary" disabled>Reject</button>
+                <button id="approve" disabled>Approve</button>
+            </div>
+        </main>
+        <script src="approval.js"></script>
+    </body>
+</html>
