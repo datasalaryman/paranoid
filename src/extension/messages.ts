@@ -21,3 +21,15 @@ export interface ApprovalDetails {
     title: string;
     lines: string[];
 }
+
+export interface WalletSummary {
+    name: string;
+    publicKey: string;
+}
+
+export interface WalletStatus {
+    active: WalletSummary | null;
+    wallets: WalletSummary[];
+    cluster: 'devnet';
+    balance: number | null;
+}

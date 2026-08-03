@@ -1,6 +1,7 @@
 import { Connection, Keypair, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import type { ApprovalDetails, ProviderRequest } from '@/extension/messages';
+import { addKeypair, getActiveKeypair, listKeypairs, selectKeypair } from '@/extension/keypairs';
 
 const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
@@ -42,10 +43,42 @@ export function setupBackground(): void {
         }
 
         if (message?.type === 'wallet:status') {
-            getKeypair().then((keypair) => sendResponse({ address: keypair.publicKey.toBase58(), cluster: 'devnet' }));
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            getWalletStatus()
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:import') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            addKeypair(new Uint8Array(message.secretKey))
+                .then(({ name, publicKey }) => sendResponse({ name, publicKey }))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:select') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            selectKeypair(message.name)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
     });
+}
+
+function isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+    return sender.id === chrome.runtime.id && !sender.tab && Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
 }
 
 async function handleProviderRequest(request: ProviderRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
@@ -118,12 +151,23 @@ function getOrigin(sender: chrome.runtime.MessageSender): string {
 }
 
 async function getKeypair(): Promise<Keypair> {
-    const { devnetSecretKey } = await chrome.storage.local.get('devnetSecretKey');
-    if (Array.isArray(devnetSecretKey)) return Keypair.fromSecretKey(new Uint8Array(devnetSecretKey));
+    const stored = await getActiveKeypair();
+    if (!stored) throw new Error('Add a keypair before connecting to Paranoid');
+    return Keypair.fromSecretKey(new Uint8Array(stored.secretKey));
+}
 
-    const keypair = Keypair.generate();
-    await chrome.storage.local.set({ devnetSecretKey: Array.from(keypair.secretKey) });
-    return keypair;
+async function getWalletStatus() {
+    const [stored, active] = await Promise.all([listKeypairs(), getActiveKeypair()]);
+    if (active) {
+        const publicKey = Keypair.fromSecretKey(new Uint8Array(active.secretKey)).publicKey;
+        return {
+            active: { name: active.name, publicKey: active.publicKey },
+            wallets: stored.map(({ name, publicKey: address }) => ({ name, publicKey: address })),
+            cluster: 'devnet' as const,
+            balance: await connection.getBalance(publicKey).catch(() => null),
+        };
+    }
+    return { active: null, wallets: [], cluster: 'devnet' as const, balance: null };
 }
 
 async function isTrusted(origin: string): Promise<boolean> {

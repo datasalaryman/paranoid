@@ -1,4 +1,7 @@
-import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Keypair } from '@solana/web3.js';
+import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
 import {
     Outlet,
     RouterProvider,
@@ -8,13 +11,9 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
+import { derivePath } from 'ed25519-hd-key';
 import { type ReactNode, useState } from 'react';
-import type { ApprovalDetails } from '@/extension/messages';
-
-interface WalletStatus {
-    address: string;
-    cluster: string;
-}
+import type { ApprovalDetails, WalletStatus } from '@/extension/messages';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
 const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
@@ -22,6 +21,9 @@ const warningClassName = 'my-[1em] text-xs leading-normal text-[#ffce73]';
 const errorClassName = 'my-[1em] text-xs leading-normal text-[#ff8f8f]';
 const buttonClassName =
     'cursor-pointer rounded-sm border-0 bg-[#68f58a] p-[13px] font-bold text-[#081009] disabled:cursor-wait disabled:opacity-45';
+const secondaryButtonClassName = `${buttonClassName} border border-[#36433a] bg-[#202722] text-[#e7f7e9]`;
+const inputClassName =
+    'w-full rounded-[6px] border border-[#36433a] bg-[#101411] p-3 text-sm text-[#e7f7e9] outline-none focus:border-[#68f58a]';
 
 const rootRoute = createRootRoute({
     component: () => <Outlet />,
@@ -40,6 +42,24 @@ const walletRoute = createRoute({
     component: PopupPage,
 });
 
+const addKeypairRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/add-keypair',
+    component: AddKeypairPage,
+});
+
+const seedPhraseRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/add-keypair/seed-phrase',
+    component: SeedPhrasePage,
+});
+
+const keypairFileRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/add-keypair/file',
+    component: KeypairFilePage,
+});
+
 const approvalRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/approval',
@@ -49,7 +69,14 @@ const approvalRoute = createRoute({
     component: ApprovalPage,
 });
 
-const routeTree = rootRoute.addChildren([popupRoute, walletRoute, approvalRoute]);
+const routeTree = rootRoute.addChildren([
+    popupRoute,
+    walletRoute,
+    addKeypairRoute,
+    seedPhraseRoute,
+    keypairFileRoute,
+    approvalRoute,
+]);
 
 export function ExtensionApp({ initialPath }: { initialPath: string }) {
     const [queryClient] = useState(
@@ -79,7 +106,7 @@ function WelcomePage() {
     const navigate = useNavigate();
     const launchApp = async () => {
         await chrome.storage.local.set({ welcomeCompleted: true });
-        await navigate({ to: '/wallet' });
+        await navigate({ to: '/add-keypair' });
     };
 
     return (
@@ -98,32 +125,234 @@ function WelcomePage() {
     );
 }
 
+function AddKeypairPage() {
+    const navigate = useNavigate();
+
+    return (
+        <WalletFrame eyebrow="PARANOID / ADD KEYPAIR">
+            <h1 className="mt-3 mb-3 text-2xl leading-[1.15] font-bold">Add Keypair</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Create a new Solana keypair in your terminal, then import it here.
+            </p>
+            <code className={`${panelClassName} block [overflow-wrap:anywhere] text-[#68f58a]`}>
+                solana-keygen new -o ./&lt;your custom filename&gt;.json
+            </code>
+            <p className={warningClassName}>Use this wallet with Devnet assets only.</p>
+            <div className="mt-6 grid gap-2.5">
+                <button className={buttonClassName} onClick={() => navigate({ to: '/add-keypair/seed-phrase' })}>
+                    Import seed phrase
+                </button>
+                <button className={secondaryButtonClassName} onClick={() => navigate({ to: '/add-keypair/file' })}>
+                    Select keypair JSON
+                </button>
+            </div>
+        </WalletFrame>
+    );
+}
+
+function SeedPhrasePage() {
+    const navigate = useNavigate();
+    const [phrase, setPhrase] = useState('');
+    const importKeypair = useImportKeypair();
+
+    const submit = () => {
+        const normalized = phrase.trim().toLowerCase().replace(/\s+/g, ' ');
+        const words = normalized ? normalized.split(' ') : [];
+        if ((words.length !== 12 && words.length !== 24) || !validateMnemonic(normalized, wordlist)) {
+            importKeypair.setLocalError('Enter a valid 12 or 24 word seed phrase.');
+            return;
+        }
+        const seed = mnemonicToSeedSync(normalized);
+        const derived = derivePath("m/44'/501'/0'/0'", bytesToHex(seed));
+        importKeypair.mutate(Array.from(Keypair.fromSeed(derived.key).secretKey), {
+            onSuccess: () => navigate({ to: '/wallet' }),
+        });
+    };
+
+    return (
+        <ImportFrame
+            title="Import seed phrase"
+            error={importKeypair.error}
+            back={() => navigate({ to: '/add-keypair' })}
+        >
+            <label className={labelClassName} htmlFor="seed-phrase">
+                12 or 24 words
+            </label>
+            <textarea
+                id="seed-phrase"
+                className={`${inputClassName} min-h-32 resize-none`}
+                value={phrase}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => {
+                    setPhrase(event.target.value);
+                    importKeypair.setLocalError('');
+                }}
+                placeholder="word one word two ..."
+            />
+            <button className={`${buttonClassName} mt-4 w-full`} disabled={importKeypair.isPending} onClick={submit}>
+                Import keypair
+            </button>
+        </ImportFrame>
+    );
+}
+
+function KeypairFilePage() {
+    const navigate = useNavigate();
+    const [fileName, setFileName] = useState('No file selected');
+    const [secretKey, setSecretKey] = useState<number[] | null>(null);
+    const importKeypair = useImportKeypair();
+
+    const selectFile = async (file: File | undefined) => {
+        if (!file) return;
+        setFileName(file.name);
+        importKeypair.setLocalError('');
+        try {
+            const parsed: unknown = JSON.parse(await file.text());
+            if (
+                !Array.isArray(parsed) ||
+                parsed.length !== 64 ||
+                parsed.some((value) => !Number.isInteger(value) || value < 0 || value > 255)
+            ) {
+                throw new Error('Select a Solana keypair JSON file containing 64 bytes.');
+            }
+            Keypair.fromSecretKey(new Uint8Array(parsed));
+            setSecretKey(parsed as number[]);
+        } catch (error) {
+            setSecretKey(null);
+            importKeypair.setLocalError(errorMessage(error));
+        }
+    };
+
+    return (
+        <ImportFrame
+            title="Select keypair file"
+            error={importKeypair.error}
+            back={() => navigate({ to: '/add-keypair' })}
+        >
+            <p className="mb-4 text-sm leading-normal text-[#b7c8ba]">Choose the JSON file created by solana-keygen.</p>
+            <label className={`${secondaryButtonClassName} block text-center`}>
+                Choose .json file
+                <input
+                    className="hidden"
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={(event) => void selectFile(event.target.files?.[0])}
+                />
+            </label>
+            <p className={`${panelClassName} truncate text-sm`}>{fileName}</p>
+            <button
+                className={`${buttonClassName} mt-4 w-full`}
+                disabled={!secretKey || importKeypair.isPending}
+                onClick={() =>
+                    secretKey && importKeypair.mutate(secretKey, { onSuccess: () => navigate({ to: '/wallet' }) })
+                }
+            >
+                Import keypair
+            </button>
+        </ImportFrame>
+    );
+}
+
 function PopupPage() {
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const status = useQuery({
         queryKey: ['wallet-status'],
-        queryFn: () => chrome.runtime.sendMessage({ type: 'wallet:status' }) as Promise<WalletStatus>,
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
     });
+    const selectWallet = useMutation({
+        mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wallet-status'] }),
+    });
+
+    if (!status.isPending && !status.isError && !status.data.active) return <AddKeypairPage />;
+
+    const active = status.data?.active;
 
     return (
         <WalletFrame eyebrow="PARANOID / TEST WALLET">
-            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">Disposable account</h1>
+            <div className="mt-3 mb-6 flex items-start justify-between gap-3">
+                <div>
+                    <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
+                        {truncateAddress(active?.publicKey)}
+                    </h1>
+                </div>
+                <select
+                    aria-label="Active keypair"
+                    className="max-w-40 rounded-[6px] border border-[#36433a] bg-[#151a17] px-2.5 py-2 text-xs text-[#e7f7e9] outline-none"
+                    disabled={!active || selectWallet.isPending}
+                    value={active?.name ?? ''}
+                    onChange={(event) => {
+                        if (event.target.value === '__add__') void navigate({ to: '/add-keypair' });
+                        else selectWallet.mutate(event.target.value);
+                    }}
+                >
+                    {status.data?.wallets.map((wallet) => (
+                        <option key={wallet.name} value={wallet.name}>
+                            {wallet.name}
+                        </option>
+                    ))}
+                    <option value="__add__">+ Add keypair</option>
+                </select>
+            </div>
             {status.isError ? (
                 <p className={errorClassName}>{errorMessage(status.error)}</p>
             ) : (
                 <>
-                    <p className={labelClassName}>Network</p>
-                    <p className={panelClassName}>{status.data?.cluster ?? 'Loading...'}</p>
-                    <p className={labelClassName}>Address</p>
-                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>
-                        {status.data?.address ?? 'Loading...'}
-                    </p>
+                    <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                            <p className={labelClassName}>Cluster</p>
+                            <p className={`${panelClassName} capitalize`}>{status.data?.cluster ?? 'Loading...'}</p>
+                        </div>
+                        <div>
+                            <p className={labelClassName}>Balance</p>
+                            <p className={panelClassName}>{formatBalance(status.data?.balance)}</p>
+                        </div>
+                    </div>
                 </>
             )}
-            <p className={warningClassName}>
-                The key is stored unencrypted in extension storage. Use devnet assets only.
-            </p>
+            {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
+            <p className={warningClassName}>Keys remain in extension-only storage. Use devnet assets only.</p>
         </WalletFrame>
     );
+}
+
+function ImportFrame({
+    title,
+    error,
+    back,
+    children,
+}: {
+    title: string;
+    error: string;
+    back: () => void;
+    children: ReactNode;
+}) {
+    return (
+        <WalletFrame eyebrow="PARANOID / ADD KEYPAIR">
+            <button className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]" onClick={back}>
+                &lt; Back
+            </button>
+            <h1 className="mt-0 mb-5 text-2xl leading-[1.15] font-bold">{title}</h1>
+            {children}
+            {error && <p className={errorClassName}>{error}</p>}
+            <p className={warningClassName}>Never use a seed phrase or keypair that holds Mainnet assets.</p>
+        </WalletFrame>
+    );
+}
+
+function useImportKeypair() {
+    const [localError, setLocalError] = useState('');
+    const mutation = useMutation({
+        mutationFn: (secretKey: number[]) =>
+            sendMessage<{ name: string; publicKey: string }>({ type: 'wallet:import', secretKey }),
+    });
+    return {
+        ...mutation,
+        error: localError || (mutation.isError ? errorMessage(mutation.error) : ''),
+        setLocalError,
+    };
 }
 
 function ApprovalPage() {
@@ -219,4 +448,24 @@ function ErrorView({ message, close = false }: { message: string; close?: boolea
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
+    const response = (await chrome.runtime.sendMessage(message)) as T | { __error: string };
+    if (response && typeof response === 'object' && '__error' in response) throw new Error(response.__error);
+    return response;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function truncateAddress(address: string | undefined): string {
+    return address ? `${address.slice(0, 4)}...${address.slice(-4)}` : 'Loading...';
+}
+
+function formatBalance(lamports: number | null | undefined): string {
+    if (lamports === undefined) return 'Loading...';
+    if (lamports === null) return 'Unavailable';
+    return `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL`;
 }
