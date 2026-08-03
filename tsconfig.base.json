@@ -4,9 +4,14 @@
         "target": "ESNext",
         "module": "ESNext",
         "moduleResolution": "Node",
+        "baseUrl": "src",
         "esModuleInterop": true,
         "isolatedModules": true,
         "noEmitOnError": true,
+        "paths": {
+            "@/lib/*": ["lib/*"],
+            "@/*": ["*"]
+        },
         "resolveJsonModule": true,
         "strict": true,
         "stripInternal": true,

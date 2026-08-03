@@ -1,7 +1,7 @@
 import { PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
-import { initialize } from '../lib/index.js';
-import type { Event, ParanoidProvider } from '../lib/window.js';
-import type { ProviderMethod, ProviderRequest, ProviderResponse } from './messages.js';
+import type { ProviderMethod, ProviderRequest, ProviderResponse } from '@/extension/messages';
+import { initialize } from '@/lib/index';
+import type { Event, ParanoidProvider } from '@/lib/window';
 
 type Listener = (...args: unknown[]) => unknown;
 
@@ -29,7 +29,8 @@ class ExtensionProvider implements ParanoidProvider {
 
         return new Promise((resolve, reject) => {
             const receive = (event: MessageEvent<ProviderResponse>) => {
-                if (event.source !== window || event.data?.channel !== 'paranoid:extension' || event.data.id !== id) return;
+                if (event.source !== window || event.data?.channel !== 'paranoid:extension' || event.data.id !== id)
+                    return;
                 window.removeEventListener('message', receive);
                 if (event.data.error) reject(new Error(event.data.error));
                 else resolve(event.data.result as T);
@@ -72,9 +73,7 @@ class ExtensionProvider implements ParanoidProvider {
 
     async signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]> {
         const bytes = await this.#request<number[][]>('signAllTransactions', {
-            transactions: transactions.map((transaction) =>
-                Array.from(serializeUnsigned(transaction))
-            ),
+            transactions: transactions.map((transaction) => Array.from(serializeUnsigned(transaction))),
         });
         return bytes.map((serialized, index) => deserializeLike(transactions[index]!, serialized) as T);
     }
@@ -97,11 +96,13 @@ function serializeUnsigned(transaction: Transaction | VersionedTransaction): Uin
         : transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
 }
 
-const provider = new ExtensionProvider();
-initialize(provider);
+export function setupInpage(): void {
+    const provider = new ExtensionProvider();
+    initialize(provider);
 
-try {
-    Object.defineProperty(window, 'paranoid', { value: provider });
-} catch (error) {
-    console.error('Paranoid could not expose its legacy provider', error);
+    try {
+        Object.defineProperty(window, 'paranoid', { value: provider });
+    } catch (error) {
+        console.error('Paranoid could not expose its legacy provider', error);
+    }
 }

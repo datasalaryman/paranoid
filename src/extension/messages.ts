@@ -1,10 +1,5 @@
 export type ProviderMethod =
-    | 'connect'
-    | 'disconnect'
-    | 'signAndSendTransaction'
-    | 'signTransaction'
-    | 'signAllTransactions'
-    | 'signMessage';
+    'connect' | 'disconnect' | 'signAndSendTransaction' | 'signTransaction' | 'signAllTransactions' | 'signMessage';
 
 export interface ProviderRequest {
     channel: 'paranoid:page';

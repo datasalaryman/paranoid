@@ -1,6 +1,6 @@
-import { registerWallet } from './register.js';
-import { Wallet } from './wallet.js';
-import type { ParanoidProvider } from './window.js';
+import { registerWallet } from '@/lib/register';
+import { Wallet } from '@/lib/wallet';
+import type { ParanoidProvider } from '@/lib/window';
 
 export function initialize(provider: ParanoidProvider): void {
     registerWallet(new Wallet(provider));

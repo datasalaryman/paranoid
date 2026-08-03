@@ -1,56 +1,52 @@
-import {
-    Connection,
-    Keypair,
-    Transaction,
-    VersionedTransaction,
-    type SendOptions,
-} from '@solana/web3.js';
+import { Connection, Keypair, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import nacl from 'tweetnacl';
-import type { ApprovalDetails, ProviderRequest } from './messages.js';
+import type { ApprovalDetails, ProviderRequest } from '@/extension/messages';
 
 const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
 const approvalWindows = new Map<number, string>();
 
-chrome.windows.onRemoved.addListener((windowId) => {
-    const id = approvalWindows.get(windowId);
-    if (!id) return;
-    approvalWindows.delete(windowId);
-    const pending = pendingApprovals.get(id);
-    if (pending) {
-        pendingApprovals.delete(id);
-        pending.resolve(false);
-    }
-});
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'provider-request') {
-        handleProviderRequest(message.request, sender)
-            .then(sendResponse)
-            .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
-        return true;
-    }
-
-    if (message?.type === 'approval:get') {
-        sendResponse(pendingApprovals.get(message.id)?.details || null);
-        return;
-    }
-
-    if (message?.type === 'approval:resolve') {
-        const pending = pendingApprovals.get(message.id);
+export function setupBackground(): void {
+    chrome.windows.onRemoved.addListener((windowId) => {
+        const id = approvalWindows.get(windowId);
+        if (!id) return;
+        approvalWindows.delete(windowId);
+        const pending = pendingApprovals.get(id);
         if (pending) {
-            pendingApprovals.delete(message.id);
-            pending.resolve(Boolean(message.approved));
+            pendingApprovals.delete(id);
+            pending.resolve(false);
         }
-        sendResponse(true);
-        return;
-    }
+    });
 
-    if (message?.type === 'wallet:status') {
-        getKeypair().then((keypair) => sendResponse({ address: keypair.publicKey.toBase58(), cluster: 'devnet' }));
-        return true;
-    }
-});
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message?.type === 'provider-request') {
+            handleProviderRequest(message.request, sender)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'approval:get') {
+            sendResponse(pendingApprovals.get(message.id)?.details || null);
+            return;
+        }
+
+        if (message?.type === 'approval:resolve') {
+            const pending = pendingApprovals.get(message.id);
+            if (pending) {
+                pendingApprovals.delete(message.id);
+                pending.resolve(Boolean(message.approved));
+            }
+            sendResponse(true);
+            return;
+        }
+
+        if (message?.type === 'wallet:status') {
+            getKeypair().then((keypair) => sendResponse({ address: keypair.publicKey.toBase58(), cluster: 'devnet' }));
+            return true;
+        }
+    });
+}
 
 async function handleProviderRequest(request: ProviderRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
     const origin = getOrigin(sender);
@@ -175,7 +171,9 @@ async function approveTransaction(
         lines.push(`Version: ${transaction.version}`);
         lines.push(`Instructions: ${transaction.message.compiledInstructions.length}`);
         for (const instruction of transaction.message.compiledInstructions) {
-            lines.push(`Program: ${transaction.message.staticAccountKeys[instruction.programIdIndex]?.toBase58() || 'lookup table'}`);
+            lines.push(
+                `Program: ${transaction.message.staticAccountKeys[instruction.programIdIndex]?.toBase58() || 'lookup table'}`
+            );
         }
     } else {
         lines.push('Version: legacy');

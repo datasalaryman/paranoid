@@ -29,12 +29,12 @@ import {
     type StandardEventsOnMethod,
 } from '@wallet-standard/features';
 import bs58 from 'bs58';
-import { WalletAccount } from './account.js';
-import { icon } from './icon.js';
-import type { SolanaChain } from './solana.js';
-import { deserializeTransaction, isSolanaChain, isVersionedTransaction, SOLANA_CHAINS } from './solana.js';
-import { bytesEqual } from './util.js';
-import type { ParanoidProvider } from './window.js';
+import { WalletAccount } from '@/lib/account';
+import { icon } from '@/lib/icon';
+import type { SolanaChain } from '@/lib/solana';
+import { deserializeTransaction, isSolanaChain, isVersionedTransaction, SOLANA_CHAINS } from '@/lib/solana';
+import { bytesEqual } from '@/lib/util';
+import type { ParanoidProvider } from '@/lib/window';
 
 export const Namespace = 'paranoid:';
 

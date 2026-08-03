@@ -56,10 +56,15 @@ li + li {
     padding-top: 9px;
 }
 
-.warning {
+.warning,
+.error {
     color: #ffce73;
     font-size: 12px;
     line-height: 1.5;
+}
+
+.error {
+    color: #ff8f8f;
 }
 
 .actions {

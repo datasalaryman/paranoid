@@ -21,12 +21,12 @@ Then:
 1. Open Chrome, Helium, Brave, Edge, or another Chromium-based browser and navigate to `chrome://extensions`.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**.
-4. Select this repository's `dist` directory.
+4. Select this repository's `.output/chrome-mv3` directory.
 5. Pin **Paranoid Devnet Wallet** and click its icon to see the generated address.
 
 The build uses the standard Manifest V3 format and contains no browser-specific integration.
 
-Run `bun run build` and click the extension's reload button on `chrome://extensions` after code changes. Reload any dapp tab as well because the provider is injected at page load.
+Run `bun run dev` for WXT development mode, or run `bun run build` and click the extension's reload button on `chrome://extensions` after code changes. Reload any dapp tab as well because the provider is injected at page load.
 
 ## Test
 
@@ -36,4 +36,4 @@ The legacy provider is also available as `window.paranoid` for local debugging, 
 
 ## Build outputs
 
-`bun run build` compiles the reusable adapter to `lib` and the loadable Chrome extension to `dist`. Use `bun run build:extension` to rebuild only the extension.
+`bun run build` compiles the reusable adapter to `lib` and uses WXT to emit the loadable Chrome extension to `.output/chrome-mv3`. Use `bun run build:extension` to rebuild only the extension.
