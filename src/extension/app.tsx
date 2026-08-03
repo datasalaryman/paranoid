@@ -16,6 +16,13 @@ interface WalletStatus {
     cluster: string;
 }
 
+const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
+const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
+const warningClassName = 'my-[1em] text-xs leading-normal text-[#ffce73]';
+const errorClassName = 'my-[1em] text-xs leading-normal text-[#ff8f8f]';
+const buttonClassName =
+    'cursor-pointer rounded-sm border-0 bg-[#68f58a] p-[13px] font-bold text-[#081009] disabled:cursor-wait disabled:opacity-45';
+
 const rootRoute = createRootRoute({
     component: () => <Outlet />,
     notFoundComponent: () => <ErrorView message="This wallet page does not exist." />,
@@ -76,14 +83,14 @@ function WelcomePage() {
     };
 
     return (
-        <WalletFrame eyebrow="PARANOID / DEVNET ONLY" className="welcome">
+        <WalletFrame eyebrow="PARANOID / DEVNET ONLY" welcome>
             <div>
-                <h1>Paranoid Wallet</h1>
-                <p className="description">A Solana wallet you never have to trust</p>
+                <h1 className="mt-3 mb-2.5 text-[32px] leading-[1.15] font-bold">Paranoid Wallet</h1>
+                <p className="m-0 text-[15px] leading-normal text-[#b7c8ba]">A Solana wallet you never have to trust</p>
             </div>
             <div>
-                <p className="warning">Disclaimer: Wallet can interact with the Devnet Cluster only</p>
-                <button className="launch" onClick={launchApp}>
+                <p className={warningClassName}>Disclaimer: Wallet can interact with the Devnet Cluster only</p>
+                <button className={`${buttonClassName} mt-4 w-full`} onClick={launchApp}>
                     Launch app
                 </button>
             </div>
@@ -99,18 +106,22 @@ function PopupPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / TEST WALLET">
-            <h1>Disposable account</h1>
+            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">Disposable account</h1>
             {status.isError ? (
-                <p className="error">{errorMessage(status.error)}</p>
+                <p className={errorClassName}>{errorMessage(status.error)}</p>
             ) : (
                 <>
-                    <p className="label">Network</p>
-                    <p className="value">{status.data?.cluster ?? 'Loading...'}</p>
-                    <p className="label">Address</p>
-                    <p className="address">{status.data?.address ?? 'Loading...'}</p>
+                    <p className={labelClassName}>Network</p>
+                    <p className={panelClassName}>{status.data?.cluster ?? 'Loading...'}</p>
+                    <p className={labelClassName}>Address</p>
+                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>
+                        {status.data?.address ?? 'Loading...'}
+                    </p>
                 </>
             )}
-            <p className="warning">The key is stored unencrypted in extension storage. Use devnet assets only.</p>
+            <p className={warningClassName}>
+                The key is stored unencrypted in extension storage. Use devnet assets only.
+            </p>
         </WalletFrame>
     );
 }
@@ -136,28 +147,39 @@ function ApprovalPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / DEVNET ONLY">
-            <h1>{request.data?.title ?? 'Loading request...'}</h1>
+            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">
+                {request.data?.title ?? 'Loading request...'}
+            </h1>
             {request.data && (
                 <>
-                    <p className="origin">{request.data.origin}</p>
-                    <ul>
+                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>{request.data.origin}</p>
+                    <ul className={`${panelClassName} max-h-[220px] list-none overflow-auto`}>
                         {request.data.lines.map((line, index) => (
-                            <li key={`${index}:${line}`}>{line}</li>
+                            <li
+                                className="[overflow-wrap:anywhere] [&+&]:mt-[9px] [&+&]:border-t [&+&]:border-[#29332c] [&+&]:pt-[9px]"
+                                key={`${index}:${line}`}
+                            >
+                                {line}
+                            </li>
                         ))}
                     </ul>
                 </>
             )}
-            <p className="warning">Disposable test key. Never fund this address with real assets.</p>
-            {decision.isError && <p className="error">{errorMessage(decision.error)}</p>}
-            <div className="actions">
+            <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
+            {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
+            <div className="mt-6 grid grid-cols-2 gap-2.5">
                 <button
-                    className="secondary"
+                    className={`${buttonClassName} bg-[#242b26] text-[#e7f7e9]`}
                     disabled={!request.data || decision.isPending}
                     onClick={() => decision.mutate(false)}
                 >
                     Reject
                 </button>
-                <button disabled={!request.data || decision.isPending} onClick={() => decision.mutate(true)}>
+                <button
+                    className={buttonClassName}
+                    disabled={!request.data || decision.isPending}
+                    onClick={() => decision.mutate(true)}
+                >
                     Approve
                 </button>
             </div>
@@ -168,15 +190,15 @@ function ApprovalPage() {
 function WalletFrame({
     eyebrow,
     children,
-    className,
+    welcome = false,
 }: {
     eyebrow: string;
     children: ReactNode;
-    className?: string;
+    welcome?: boolean;
 }) {
     return (
-        <main className={className}>
-            <p className="eyebrow">{eyebrow}</p>
+        <main className={welcome ? 'flex min-h-[460px] flex-col justify-between p-7' : 'p-7'}>
+            <p className={`${labelClassName} ${welcome ? 'mb-auto' : ''}`}>{eyebrow}</p>
             {children}
         </main>
     );
@@ -185,8 +207,12 @@ function WalletFrame({
 function ErrorView({ message, close = false }: { message: string; close?: boolean }) {
     return (
         <WalletFrame eyebrow="PARANOID / DEVNET ONLY">
-            <h1>{message}</h1>
-            {close && <button onClick={() => window.close()}>Close</button>}
+            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">{message}</h1>
+            {close && (
+                <button className={buttonClassName} onClick={() => window.close()}>
+                    Close
+                </button>
+            )}
         </WalletFrame>
     );
 }
