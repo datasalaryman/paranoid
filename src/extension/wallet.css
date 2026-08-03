@@ -14,6 +14,35 @@ main {
     padding: 28px;
 }
 
+main.welcome {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 460px;
+}
+
+.welcome .eyebrow {
+    margin-bottom: auto;
+}
+
+.welcome h1 {
+    font-size: 32px;
+    margin-bottom: 10px;
+}
+
+.description {
+    color: #b7c8ba;
+    font-size: 15px;
+    line-height: 1.5;
+    margin: 0;
+}
+
+.launch {
+    margin-top: 16px;
+    width: 100%;
+}
+
 .eyebrow,
 .label {
     color: #68f58a;

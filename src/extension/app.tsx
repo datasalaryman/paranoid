@@ -6,6 +6,7 @@ import {
     createRootRoute,
     createRoute,
     createRouter,
+    useNavigate,
 } from '@tanstack/react-router';
 import { type ReactNode, useState } from 'react';
 import type { ApprovalDetails } from '@/extension/messages';
@@ -23,6 +24,12 @@ const rootRoute = createRootRoute({
 const popupRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/',
+    component: WelcomePage,
+});
+
+const walletRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/wallet',
     component: PopupPage,
 });
 
@@ -35,7 +42,7 @@ const approvalRoute = createRoute({
     component: ApprovalPage,
 });
 
-const routeTree = rootRoute.addChildren([popupRoute, approvalRoute]);
+const routeTree = rootRoute.addChildren([popupRoute, walletRoute, approvalRoute]);
 
 export function ExtensionApp({ initialPath }: { initialPath: string }) {
     const [queryClient] = useState(
@@ -58,6 +65,29 @@ export function ExtensionApp({ initialPath }: { initialPath: string }) {
         <QueryClientProvider client={queryClient}>
             <RouterProvider router={router} />
         </QueryClientProvider>
+    );
+}
+
+function WelcomePage() {
+    const navigate = useNavigate();
+    const launchApp = async () => {
+        await chrome.storage.local.set({ welcomeCompleted: true });
+        await navigate({ to: '/wallet' });
+    };
+
+    return (
+        <WalletFrame eyebrow="PARANOID / DEVNET ONLY" className="welcome">
+            <div>
+                <h1>Paranoid Wallet</h1>
+                <p className="description">A Solana wallet you never have to trust</p>
+            </div>
+            <div>
+                <p className="warning">Disclaimer: Wallet can interact with the Devnet Cluster only</p>
+                <button className="launch" onClick={launchApp}>
+                    Launch app
+                </button>
+            </div>
+        </WalletFrame>
     );
 }
 
@@ -135,9 +165,17 @@ function ApprovalPage() {
     );
 }
 
-function WalletFrame({ eyebrow, children }: { eyebrow: string; children: ReactNode }) {
+function WalletFrame({
+    eyebrow,
+    children,
+    className,
+}: {
+    eyebrow: string;
+    children: ReactNode;
+    className?: string;
+}) {
     return (
-        <main>
+        <main className={className}>
             <p className="eyebrow">{eyebrow}</p>
             {children}
         </main>
