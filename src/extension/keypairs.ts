@@ -1,4 +1,5 @@
 import { Keypair } from '@solana/web3.js';
+import { signerFromSecretKey } from '@/extension/signer';
 import type { SolanaChain } from '@/lib/solana';
 
 export interface StoredKeypair {
@@ -239,7 +240,7 @@ export async function getActiveSigner(): Promise<Keypair | null> {
     if (!stored) return null;
     const plaintext = await decrypt(requireUnlockedVault(), stored.encryptedSecretKey, keypairAdditionalData(stored));
     try {
-        return Keypair.fromSecretKey(plaintext);
+        return signerFromSecretKey(plaintext);
     } finally {
         plaintext.fill(0);
     }

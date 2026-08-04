@@ -21,7 +21,7 @@ import {
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
 const approvalWindows = new Map<number, string>();
 const MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
-const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const TESTNET_GENESIS_HASH = '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY';
 
 export function setupBackground(): void {
