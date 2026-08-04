@@ -828,5 +828,5 @@ function truncateAddress(address: string | undefined): string {
 function formatBalance(lamports: number | null | undefined): string {
     if (lamports === undefined) return 'Loading...';
     if (lamports === null) return 'Unavailable';
-    return `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} SOL`;
+    return `${(lamports / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 9 })} SOL`;
 }
