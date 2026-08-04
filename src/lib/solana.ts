@@ -33,6 +33,19 @@ export function isSolanaChain(chain: IdentifierString): chain is SolanaChain {
     return SOLANA_CHAINS.includes(chain as SolanaChain);
 }
 
+export function getSolanaExplorerAccountTokensUrl(address: string, chain: SolanaChain, customRpcUrl?: string): string {
+    const explorerUrl = new URL(`/address/${encodeURIComponent(address)}/tokens`, 'https://explorer.solana.com');
+
+    if (customRpcUrl) {
+        explorerUrl.searchParams.set('cluster', 'custom');
+        explorerUrl.searchParams.set('customUrl', customRpcUrl);
+    } else if (chain !== SOLANA_MAINNET_CHAIN) {
+        explorerUrl.searchParams.set('cluster', chain.replace('solana:', ''));
+    }
+
+    return explorerUrl.toString();
+}
+
 export function isVersionedTransaction(
     transaction: Transaction | VersionedTransaction
 ): transaction is VersionedTransaction {

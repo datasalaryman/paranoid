@@ -278,6 +278,7 @@ async function getWalletStatus() {
                 name: activeRpc.name,
                 kind: activeRpc.kind,
                 chain: activeRpc.chain,
+                url: activeRpc.url,
             },
             rpcs,
             balance: activeRpc
@@ -295,6 +296,7 @@ async function getWalletStatus() {
             name: activeRpc.name,
             kind: activeRpc.kind,
             chain: activeRpc.chain,
+            url: activeRpc.url,
         },
         rpcs,
         balance: null,

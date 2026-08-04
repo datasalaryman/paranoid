@@ -30,7 +30,7 @@ export interface WalletSummary {
 export interface WalletStatus {
     active: WalletSummary | null;
     wallets: WalletSummary[];
-    activeRpc: RpcSummary | null;
+    activeRpc: ActiveRpcSummary | null;
     rpcs: RpcSummary[];
     balance: number | null;
 }
@@ -40,6 +40,10 @@ export interface RpcSummary {
     name: string;
     kind: 'localnet' | 'devnet' | 'testnet' | 'custom';
     chain: SolanaChain;
+}
+
+export interface ActiveRpcSummary extends RpcSummary {
+    url: string;
 }
 
 export interface VaultStatus {

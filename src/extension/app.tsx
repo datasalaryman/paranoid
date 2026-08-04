@@ -13,7 +13,8 @@ import {
 } from '@tanstack/react-router';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
-import type { ApprovalDetails, RpcSummary, WalletStatus } from '@/extension/messages';
+import type { ActiveRpcSummary, ApprovalDetails, RpcSummary, WalletStatus } from '@/extension/messages';
+import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
 const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
@@ -563,6 +564,15 @@ function PopupPage() {
     if (!status.isPending && !status.isError && !status.data.activeRpc) return <AddRpcPage />;
 
     const active = status.data?.active;
+    const activeRpc = status.data?.activeRpc;
+    const explorerUrl =
+        active && activeRpc
+            ? getSolanaExplorerAccountTokensUrl(
+                  active.publicKey,
+                  activeRpc.chain,
+                  activeRpc.kind === 'custom' || activeRpc.kind === 'localnet' ? activeRpc.url : undefined
+              )
+            : undefined;
 
     return (
         <WalletFrame eyebrow="PARANOID / TEST WALLET">
@@ -590,13 +600,37 @@ function PopupPage() {
                     <option value="__add__">+ Add keypair</option>
                 </select>
             </div>
-            <RpcSelect rpcs={status.data?.rpcs ?? []} active={status.data?.activeRpc ?? null} />
+            <RpcSelect rpcs={status.data?.rpcs ?? []} active={activeRpc ?? null} />
             {status.isError ? (
                 <p className={errorClassName}>{errorMessage(status.error)}</p>
             ) : (
                 <div>
                     <p className={labelClassName}>Balance</p>
                     <p className={panelClassName}>{formatBalance(status.data?.balance)}</p>
+                    {explorerUrl && (
+                        <div className="my-[1em] rounded-[6px] border border-[#36433a] bg-[#101411] p-[14px] text-xs leading-relaxed text-[#b7c8ba]">
+                            Paranoid will not show your token balances. To view them, visit Solana Explorer{' '}
+                            <a
+                                className="inline-flex items-center gap-1 font-semibold text-[#68f58a] underline decoration-[#68f58a]/50 underline-offset-2 hover:decoration-[#68f58a]"
+                                href={explorerUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                here
+                                <svg
+                                    aria-hidden="true"
+                                    className="size-3"
+                                    viewBox="0 0 16 16"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.75"
+                                >
+                                    <path d="M5 11 11 5M6 5h5v5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                            </a>
+                            .
+                        </div>
+                    )}
                 </div>
             )}
             {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
@@ -605,7 +639,7 @@ function PopupPage() {
     );
 }
 
-function RpcSelect({ rpcs, active }: { rpcs: RpcSummary[]; active: RpcSummary | null }) {
+function RpcSelect({ rpcs, active }: { rpcs: RpcSummary[]; active: ActiveRpcSummary | null }) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [permissionError, setPermissionError] = useState('');
