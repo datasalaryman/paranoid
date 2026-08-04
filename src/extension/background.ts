@@ -1,7 +1,17 @@
-import { Connection, Keypair, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import type { ApprovalDetails, ProviderRequest } from '@/extension/messages';
-import { addKeypair, getActiveKeypair, listKeypairs, selectKeypair } from '@/extension/keypairs';
+import {
+    addKeypair,
+    getActiveKeypair,
+    getActiveSigner,
+    getVaultStatus,
+    listKeypairs,
+    selectKeypair,
+    setupVault,
+    touchVault,
+    unlockVault,
+} from '@/extension/keypairs';
 
 const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
@@ -53,14 +63,40 @@ export function setupBackground(): void {
             return true;
         }
 
+        if (message?.type === 'wallet:vault-status') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            getVaultStatus()
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:setup-vault' || message?.type === 'wallet:unlock') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            const operation =
+                message.type === 'wallet:setup-vault' ? setupVault(message.password) : unlockVault(message.password);
+            operation
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
         if (message?.type === 'wallet:import') {
             if (!isExtensionPage(sender)) {
                 sendResponse({ __error: 'Wallet management is only available from Paranoid' });
                 return;
             }
-            addKeypair(new Uint8Array(message.secretKey))
+            const secretKey = new Uint8Array(message.secretKey);
+            addKeypair(secretKey)
                 .then(({ name, publicKey }) => sendResponse({ name, publicKey }))
-                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }))
+                .finally(() => secretKey.fill(0));
             return true;
         }
 
@@ -85,61 +121,72 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
     const origin = getOrigin(sender);
     const keypair = await getKeypair();
 
-    switch (request.method) {
-        case 'connect': {
-            const onlyIfTrusted = Boolean((request.params as { onlyIfTrusted?: boolean } | undefined)?.onlyIfTrusted);
-            const trusted = await isTrusted(origin);
-            if (!trusted && onlyIfTrusted) throw new Error('This site is not connected to Paranoid');
-            if (!trusted) {
-                await requireApproval(origin, 'Connect to Paranoid?', [
-                    `Account: ${keypair.publicKey.toBase58()}`,
+    try {
+        switch (request.method) {
+            case 'connect': {
+                const onlyIfTrusted = Boolean(
+                    (request.params as { onlyIfTrusted?: boolean } | undefined)?.onlyIfTrusted
+                );
+                const trusted = await isTrusted(origin);
+                if (!trusted && onlyIfTrusted) throw new Error('This site is not connected to Paranoid');
+                if (!trusted) {
+                    await requireApproval(origin, 'Connect to Paranoid?', [
+                        `Account: ${keypair.publicKey.toBase58()}`,
+                        'Network: Solana devnet',
+                    ]);
+                    await trust(origin);
+                }
+                return keypair.publicKey.toBase58();
+            }
+            case 'disconnect':
+                await untrust(origin);
+                return null;
+            case 'signMessage': {
+                await requireTrusted(origin);
+                const message = new Uint8Array((request.params as { message: number[] }).message);
+                const text = new TextDecoder().decode(message);
+                await requireApproval(origin, 'Sign message?', [
+                    printable(text) ? text : `${message.length} binary bytes`,
+                ]);
+                return Array.from(nacl.sign.detached(message, keypair.secretKey));
+            }
+            case 'signTransaction': {
+                await requireTrusted(origin);
+                const transaction = deserialize((request.params as { transaction: number[] }).transaction);
+                await approveTransaction(origin, transaction, 'Sign transaction?');
+                sign(transaction, keypair);
+                return Array.from(serialize(transaction));
+            }
+            case 'signAllTransactions': {
+                await requireTrusted(origin);
+                const transactions = (request.params as { transactions: number[][] }).transactions.map(deserialize);
+                await requireApproval(origin, 'Sign multiple transactions?', [
+                    `${transactions.length} transactions`,
                     'Network: Solana devnet',
                 ]);
-                await trust(origin);
+                transactions.forEach((transaction) => sign(transaction, keypair));
+                return transactions.map((transaction) => Array.from(serialize(transaction)));
             }
-            return keypair.publicKey.toBase58();
+            case 'signAndSendTransaction': {
+                await requireTrusted(origin);
+                const { transaction: bytes, options } = request.params as {
+                    transaction: number[];
+                    options?: SendOptions;
+                };
+                const transaction = deserialize(bytes);
+                await approveTransaction(origin, transaction, 'Sign and send transaction?');
+                sign(transaction, keypair);
+                const simulation =
+                    'version' in transaction
+                        ? await connection.simulateTransaction(transaction)
+                        : await connection.simulateTransaction(transaction);
+                if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+                const signature = await connection.sendRawTransaction(serialize(transaction), options);
+                return { signature };
+            }
         }
-        case 'disconnect':
-            await untrust(origin);
-            return null;
-        case 'signMessage': {
-            await requireTrusted(origin);
-            const message = new Uint8Array((request.params as { message: number[] }).message);
-            const text = new TextDecoder().decode(message);
-            await requireApproval(origin, 'Sign message?', [printable(text) ? text : `${message.length} binary bytes`]);
-            return Array.from(nacl.sign.detached(message, keypair.secretKey));
-        }
-        case 'signTransaction': {
-            await requireTrusted(origin);
-            const transaction = deserialize((request.params as { transaction: number[] }).transaction);
-            await approveTransaction(origin, transaction, 'Sign transaction?');
-            sign(transaction, keypair);
-            return Array.from(serialize(transaction));
-        }
-        case 'signAllTransactions': {
-            await requireTrusted(origin);
-            const transactions = (request.params as { transactions: number[][] }).transactions.map(deserialize);
-            await requireApproval(origin, 'Sign multiple transactions?', [
-                `${transactions.length} transactions`,
-                'Network: Solana devnet',
-            ]);
-            transactions.forEach((transaction) => sign(transaction, keypair));
-            return transactions.map((transaction) => Array.from(serialize(transaction)));
-        }
-        case 'signAndSendTransaction': {
-            await requireTrusted(origin);
-            const { transaction: bytes, options } = request.params as { transaction: number[]; options?: SendOptions };
-            const transaction = deserialize(bytes);
-            await approveTransaction(origin, transaction, 'Sign and send transaction?');
-            sign(transaction, keypair);
-            const simulation =
-                'version' in transaction
-                    ? await connection.simulateTransaction(transaction)
-                    : await connection.simulateTransaction(transaction);
-            if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
-            const signature = await connection.sendRawTransaction(serialize(transaction), options);
-            return { signature };
-        }
+    } finally {
+        keypair.secretKey.fill(0);
     }
 }
 
@@ -151,20 +198,21 @@ function getOrigin(sender: chrome.runtime.MessageSender): string {
 }
 
 async function getKeypair(): Promise<Keypair> {
-    const stored = await getActiveKeypair();
-    if (!stored) throw new Error('Add a keypair before connecting to Paranoid');
-    return Keypair.fromSecretKey(new Uint8Array(stored.secretKey));
+    const keypair = await getActiveSigner();
+    if (!keypair) throw new Error('Add a keypair before connecting to Paranoid');
+    return keypair;
 }
 
 async function getWalletStatus() {
+    touchVault();
     const [stored, active] = await Promise.all([listKeypairs(), getActiveKeypair()]);
     if (active) {
-        const publicKey = Keypair.fromSecretKey(new Uint8Array(active.secretKey)).publicKey;
+        const publicKey = active.publicKey;
         return {
             active: { name: active.name, publicKey: active.publicKey },
             wallets: stored.map(({ name, publicKey: address }) => ({ name, publicKey: address })),
             cluster: 'devnet' as const,
-            balance: await connection.getBalance(publicKey).catch(() => null),
+            balance: await connection.getBalance(new PublicKey(publicKey)).catch(() => null),
         };
     }
     return { active: null, wallets: [], cluster: 'devnet' as const, balance: null };

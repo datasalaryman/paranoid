@@ -12,7 +12,7 @@ import {
     useNavigate,
 } from '@tanstack/react-router';
 import { derivePath } from 'ed25519-hd-key';
-import { type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import type { ApprovalDetails, WalletStatus } from '@/extension/messages';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
@@ -40,6 +40,18 @@ const walletRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/wallet',
     component: PopupPage,
+});
+
+const createPasswordRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/create-password',
+    component: CreatePasswordPage,
+});
+
+const unlockRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/unlock',
+    component: UnlockPage,
 });
 
 const addKeypairRoute = createRoute({
@@ -72,6 +84,8 @@ const approvalRoute = createRoute({
 const routeTree = rootRoute.addChildren([
     popupRoute,
     walletRoute,
+    createPasswordRoute,
+    unlockRoute,
     addKeypairRoute,
     seedPhraseRoute,
     keypairFileRoute,
@@ -106,7 +120,7 @@ function WelcomePage() {
     const navigate = useNavigate();
     const launchApp = async () => {
         await chrome.storage.local.set({ welcomeCompleted: true });
-        await navigate({ to: '/add-keypair' });
+        await navigate({ to: '/create-password' });
     };
 
     return (
@@ -121,6 +135,132 @@ function WelcomePage() {
                     Launch app
                 </button>
             </div>
+        </WalletFrame>
+    );
+}
+
+function CreatePasswordPage() {
+    const navigate = useNavigate();
+    const [password, setPassword] = useState('');
+    const [confirmation, setConfirmation] = useState('');
+    const [localError, setLocalError] = useState('');
+    const setup = useMutation({
+        mutationFn: (value: string) => sendMessage<boolean>({ type: 'wallet:setup-vault', password: value }),
+        onSuccess: async () => {
+            setPassword('');
+            setConfirmation('');
+            const status = await sendMessage<WalletStatus>({ type: 'wallet:status' });
+            await navigate({ to: status.active ? '/wallet' : '/add-keypair' });
+        },
+    });
+
+    const submit = (event: FormEvent) => {
+        event.preventDefault();
+        if (password.length < 8) {
+            setLocalError('Use at least 8 characters. A longer password is safer.');
+            return;
+        }
+        if (password !== confirmation) {
+            setLocalError('Passwords do not match.');
+            return;
+        }
+        setLocalError('');
+        setup.mutate(password);
+    };
+
+    return (
+        <WalletFrame eyebrow="PARANOID / SECURE WALLET">
+            <h1 className="mt-3 mb-3 text-2xl leading-[1.15] font-bold">Create a password</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Your password encrypts every keypair before it is stored. Paranoid cannot recover it.
+            </p>
+            <form onSubmit={submit}>
+                <label className={labelClassName} htmlFor="password">
+                    Password
+                </label>
+                <input
+                    id="password"
+                    className={inputClassName}
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(event) => {
+                        setPassword(event.target.value);
+                        setLocalError('');
+                    }}
+                    autoFocus
+                />
+                <label className={labelClassName} htmlFor="confirm-password">
+                    Confirm password
+                </label>
+                <input
+                    id="confirm-password"
+                    className={inputClassName}
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmation}
+                    onChange={(event) => {
+                        setConfirmation(event.target.value);
+                        setLocalError('');
+                    }}
+                />
+                {(localError || setup.isError) && (
+                    <p className={errorClassName}>{localError || errorMessage(setup.error)}</p>
+                )}
+                <p className={warningClassName}>The wallet locks after 5 minutes without activity.</p>
+                <button className={`${buttonClassName} mt-4 w-full`} disabled={setup.isPending} type="submit">
+                    Create password
+                </button>
+            </form>
+        </WalletFrame>
+    );
+}
+
+function UnlockPage() {
+    const navigate = useNavigate();
+    const [password, setPassword] = useState('');
+    const unlock = useMutation({
+        mutationFn: (value: string) => sendMessage<boolean>({ type: 'wallet:unlock', password: value }),
+        onSuccess: async () => {
+            setPassword('');
+            const status = await sendMessage<WalletStatus>({ type: 'wallet:status' });
+            await navigate({ to: status.active ? '/wallet' : '/add-keypair' });
+        },
+    });
+
+    return (
+        <WalletFrame eyebrow="PARANOID / WALLET LOCKED">
+            <h1 className="mt-3 mb-3 text-2xl leading-[1.15] font-bold">Unlock wallet</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Enter your password to decrypt keypairs in memory. The wallet locks after 5 minutes without activity.
+            </p>
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    if (password) unlock.mutate(password);
+                }}
+            >
+                <label className={labelClassName} htmlFor="unlock-password">
+                    Password
+                </label>
+                <input
+                    id="unlock-password"
+                    className={inputClassName}
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoFocus
+                />
+                {unlock.isError && <p className={errorClassName}>{errorMessage(unlock.error)}</p>}
+                <button
+                    className={`${buttonClassName} mt-4 w-full`}
+                    disabled={!password || unlock.isPending}
+                    type="submit"
+                >
+                    Unlock
+                </button>
+            </form>
         </WalletFrame>
     );
 }
@@ -313,7 +453,7 @@ function PopupPage() {
                 </>
             )}
             {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
-            <p className={warningClassName}>Keys remain in extension-only storage. Use devnet assets only.</p>
+            <p className={warningClassName}>Keypairs are encrypted at rest. Use devnet assets only.</p>
         </WalletFrame>
     );
 }

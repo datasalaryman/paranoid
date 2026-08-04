@@ -33,3 +33,8 @@ export interface WalletStatus {
     cluster: 'devnet';
     balance: number | null;
 }
+
+export interface VaultStatus {
+    configured: boolean;
+    unlocked: boolean;
+}
