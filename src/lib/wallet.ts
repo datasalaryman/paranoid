@@ -200,7 +200,8 @@ export class Wallet implements WalletStandard {
                     minContextSlot,
                     maxRetries,
                     skipPreflight,
-                }
+                },
+                chain
             );
 
             outputs.push({ signature: bs58.decode(signature) });
@@ -223,9 +224,7 @@ export class Wallet implements WalletStandard {
             if (account !== this.#account) throw new Error('invalid account');
             if (chain && !isSolanaChain(chain)) throw new Error('invalid chain');
 
-            const signedTransaction = await this.#provider.signTransaction(
-                deserializeTransaction(transaction)
-            );
+            const signedTransaction = await this.#provider.signTransaction(deserializeTransaction(transaction), chain);
 
             const serializedTransaction = isVersionedTransaction(signedTransaction)
                 ? signedTransaction.serialize()
@@ -253,7 +252,7 @@ export class Wallet implements WalletStandard {
 
             const transactions = inputs.map(({ transaction }) => deserializeTransaction(transaction));
 
-            const signedTransactions = await this.#provider.signAllTransactions(transactions);
+            const signedTransactions = await this.#provider.signAllTransactions(transactions, chain);
 
             outputs.push(
                 ...signedTransactions.map((signedTransaction) => {
@@ -294,5 +293,4 @@ export class Wallet implements WalletStandard {
 
         return outputs;
     };
-
 }

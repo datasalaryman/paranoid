@@ -17,7 +17,10 @@ export const SOLANA_LOCALNET_CHAIN = 'solana:localnet';
 
 /** Array of all Solana clusters */
 export const SOLANA_CHAINS = [
+    SOLANA_MAINNET_CHAIN,
     SOLANA_DEVNET_CHAIN,
+    SOLANA_TESTNET_CHAIN,
+    SOLANA_LOCALNET_CHAIN,
 ] as const;
 
 /** Type of all Solana clusters */

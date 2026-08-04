@@ -1,10 +1,30 @@
 import { Keypair } from '@solana/web3.js';
+import type { SolanaChain } from '@/lib/solana';
 
 export interface StoredKeypair {
     name: string;
     publicKey: string;
     encryptedSecretKey: EncryptedValue;
     createdAt: number;
+}
+
+export interface RpcSummary {
+    id: string;
+    name: string;
+    kind: 'localnet' | 'devnet' | 'testnet' | 'custom';
+    chain: SolanaChain;
+}
+
+interface StoredRpc {
+    id: string;
+    name: string;
+    chain: SolanaChain;
+    encryptedUrl: EncryptedValue;
+    createdAt: number;
+}
+
+export interface ActiveRpc extends RpcSummary {
+    url: string;
 }
 
 interface LegacyStoredKeypair extends Omit<StoredKeypair, 'encryptedSecretKey'> {
@@ -25,10 +45,12 @@ interface VaultSettings {
 }
 
 const DATABASE_NAME = 'paranoid-wallet';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const KEYPAIR_STORE = 'keypairs';
+const RPC_STORE = 'rpcs';
 const SETTINGS_STORE = 'settings';
 const ACTIVE_KEY = 'activeKeypair';
+const ACTIVE_RPC_KEY = 'activeRpc';
 const VAULT_KEY = 'vault';
 const PBKDF2_ITERATIONS = 600_000;
 const VAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -36,6 +58,30 @@ const VAULT_VERIFIER = new TextEncoder().encode('paranoid-wallet-vault-v1');
 let unlockedVaultKey: CryptoKey | null = null;
 let vaultLockTimer: ReturnType<typeof setTimeout> | null = null;
 let vaultLastUsedAt = 0;
+
+const BUILT_IN_RPCS: ActiveRpc[] = [
+    {
+        id: 'localnet',
+        name: 'Localnet',
+        kind: 'localnet',
+        chain: 'solana:localnet',
+        url: 'http://127.0.0.1:8899',
+    },
+    {
+        id: 'devnet',
+        name: 'Devnet',
+        kind: 'devnet',
+        chain: 'solana:devnet',
+        url: 'https://api.devnet.solana.com',
+    },
+    {
+        id: 'testnet',
+        name: 'Testnet',
+        kind: 'testnet',
+        chain: 'solana:testnet',
+        url: 'https://api.testnet.solana.com',
+    },
+];
 
 const colors = [
     'Amber',
@@ -210,6 +256,83 @@ export async function selectKeypair(name: string): Promise<void> {
     database.close();
 }
 
+export async function listRpcs(): Promise<RpcSummary[]> {
+    const custom = await readAllRpcs();
+    return [
+        ...BUILT_IN_RPCS.map(({ id, name, kind, chain }) => ({ id, name, kind, chain })),
+        ...custom.map(({ id, name, chain }) => ({ id, name, kind: 'custom' as const, chain })),
+    ];
+}
+
+export async function addRpc(value: string, chain: SolanaChain): Promise<RpcSummary> {
+    const key = requireUnlockedVault();
+    const url = normalizeRpcUrl(value);
+    const existing = await readAllRpcs();
+    const id = crypto.randomUUID();
+    const name = createRpcName(new Set(existing.map((rpc) => rpc.name)));
+    const metadata = { id, name, chain };
+    const plaintext = new TextEncoder().encode(url);
+    let stored: StoredRpc;
+    try {
+        stored = {
+            ...metadata,
+            encryptedUrl: await encrypt(key, plaintext, rpcAdditionalData(metadata)),
+            createdAt: Date.now(),
+        };
+    } finally {
+        plaintext.fill(0);
+    }
+
+    const database = await openDatabase();
+    const transaction = database.transaction([RPC_STORE, SETTINGS_STORE], 'readwrite');
+    transaction.objectStore(RPC_STORE).add(stored);
+    transaction.objectStore(SETTINGS_STORE).put({ key: ACTIVE_RPC_KEY, value: stored.id });
+    await transactionDone(transaction);
+    database.close();
+    return { id, name, kind: 'custom', chain };
+}
+
+export async function selectRpc(id: string): Promise<void> {
+    touchVault();
+    const builtIn = BUILT_IN_RPCS.some((rpc) => rpc.id === id);
+    const database = await openDatabase();
+    const transaction = database.transaction([RPC_STORE, SETTINGS_STORE], 'readwrite');
+    const custom = builtIn
+        ? undefined
+        : await request<StoredRpc | undefined>(transaction.objectStore(RPC_STORE).get(id));
+    if (!builtIn && !custom) {
+        database.close();
+        throw new Error('RPC not found');
+    }
+    transaction.objectStore(SETTINGS_STORE).put({ key: ACTIVE_RPC_KEY, value: id });
+    await transactionDone(transaction);
+    database.close();
+}
+
+export async function getActiveRpc(): Promise<ActiveRpc | null> {
+    const id = await getSetting<string>(ACTIVE_RPC_KEY);
+    if (!id) return null;
+    const builtIn = BUILT_IN_RPCS.find((rpc) => rpc.id === id);
+    if (builtIn) return builtIn;
+
+    const database = await openDatabase();
+    const stored = await request<StoredRpc | undefined>(database.transaction(RPC_STORE).objectStore(RPC_STORE).get(id));
+    database.close();
+    if (!stored) return null;
+    const plaintext = await decrypt(requireUnlockedVault(), stored.encryptedUrl, rpcAdditionalData(stored));
+    try {
+        return {
+            id: stored.id,
+            name: stored.name,
+            kind: 'custom',
+            chain: stored.chain,
+            url: new TextDecoder().decode(plaintext),
+        };
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
 function requireUnlockedVault(): CryptoKey {
     lockVaultIfIdle();
     if (!unlockedVaultKey) throw new Error('Wallet is locked. Open Paranoid to unlock it');
@@ -283,6 +406,10 @@ function keypairAdditionalData(stored: { name: string; publicKey: string }): Uin
     return new TextEncoder().encode(`paranoid-wallet:keypair:${stored.name}:${stored.publicKey}:v1`);
 }
 
+function rpcAdditionalData(stored: { id: string; name: string; chain: SolanaChain }): Uint8Array {
+    return new TextEncoder().encode(`paranoid-wallet:rpc:${stored.id}:${stored.name}:${stored.chain}:v1`);
+}
+
 function asArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     const copy = new Uint8Array(bytes.byteLength);
     copy.set(bytes);
@@ -300,6 +427,13 @@ async function readAllKeypairs(): Promise<Array<StoredKeypair | LegacyStoredKeyp
     );
     database.close();
     return keypairs.sort((left, right) => left.createdAt - right.createdAt);
+}
+
+async function readAllRpcs(): Promise<StoredRpc[]> {
+    const database = await openDatabase();
+    const rpcs = await request<StoredRpc[]>(database.transaction(RPC_STORE).objectStore(RPC_STORE).getAll());
+    database.close();
+    return rpcs.sort((left, right) => left.createdAt - right.createdAt);
 }
 
 async function getSetting<T>(key: string): Promise<T | undefined> {
@@ -320,12 +454,35 @@ function createName(existingNames: Set<string>): string {
     return available[randomValue % available.length]!;
 }
 
+function createRpcName(existingNames: Set<string>): string {
+    const available = animals.map((animal) => `${animal}net`).filter((name) => !existingNames.has(name));
+    if (!available.length) throw new Error('No RPC names are available');
+    const randomValue = crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
+    return available[randomValue % available.length]!;
+}
+
+function normalizeRpcUrl(value: string): string {
+    let url: URL;
+    try {
+        url = new URL(value.trim());
+    } catch {
+        throw new Error('Enter a valid RPC URL');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('RPC URL must use http or https');
+    }
+    return url.toString();
+}
+
 function openDatabase(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         const open = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
         open.onupgradeneeded = () => {
             if (!open.result.objectStoreNames.contains(KEYPAIR_STORE)) {
                 open.result.createObjectStore(KEYPAIR_STORE, { keyPath: 'name' });
+            }
+            if (!open.result.objectStoreNames.contains(RPC_STORE)) {
+                open.result.createObjectStore(RPC_STORE, { keyPath: 'id' });
             }
             if (!open.result.objectStoreNames.contains(SETTINGS_STORE)) {
                 open.result.createObjectStore(SETTINGS_STORE, { keyPath: 'key' });

@@ -36,7 +36,6 @@
         "@wallet-standard/base": "^1.1.0",
         "@wallet-standard/features": "^1.1.0",
         "bs58": "^6.0.0",
-        "ed25519-hd-key": "^2.0.0",
         "react": "^19.2.8",
         "react-dom": "^19.2.8",
         "tweetnacl": "^1.0.3"

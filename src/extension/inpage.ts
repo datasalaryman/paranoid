@@ -1,6 +1,7 @@
 import { PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import type { ProviderMethod, ProviderRequest, ProviderResponse } from '@/extension/messages';
 import { initialize } from '@/lib/index';
+import type { SolanaChain } from '@/lib/solana';
 import type { Event, ParanoidProvider } from '@/lib/window';
 
 type Listener = (...args: unknown[]) => unknown;
@@ -56,24 +57,34 @@ class ExtensionProvider implements ParanoidProvider {
 
     async signAndSendTransaction<T extends Transaction | VersionedTransaction>(
         transaction: T,
-        options?: SendOptions
+        options?: SendOptions,
+        chain?: SolanaChain
     ): Promise<{ signature: string }> {
         return this.#request('signAndSendTransaction', {
             transaction: Array.from(serializeUnsigned(transaction)),
             options,
+            chain,
         });
     }
 
-    async signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T> {
+    async signTransaction<T extends Transaction | VersionedTransaction>(
+        transaction: T,
+        chain?: SolanaChain
+    ): Promise<T> {
         const bytes = await this.#request<number[]>('signTransaction', {
             transaction: Array.from(serializeUnsigned(transaction)),
+            chain,
         });
         return deserializeLike(transaction, bytes) as T;
     }
 
-    async signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]> {
+    async signAllTransactions<T extends Transaction | VersionedTransaction>(
+        transactions: T[],
+        chain?: SolanaChain
+    ): Promise<T[]> {
         const bytes = await this.#request<number[][]>('signAllTransactions', {
             transactions: transactions.map((transaction) => Array.from(serializeUnsigned(transaction))),
+            chain,
         });
         return bytes.map((serialized, index) => deserializeLike(transactions[index]!, serialized) as T);
     }

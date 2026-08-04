@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Keypair } from '@solana/web3.js';
-import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
+import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import {
     Outlet,
@@ -11,9 +11,9 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
-import { derivePath } from 'ed25519-hd-key';
 import { type FormEvent, type ReactNode, useState } from 'react';
-import type { ApprovalDetails, WalletStatus } from '@/extension/messages';
+import { keypairFromMnemonic } from '@/extension/mnemonic';
+import type { ApprovalDetails, RpcSummary, WalletStatus } from '@/extension/messages';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
 const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
@@ -24,6 +24,7 @@ const buttonClassName =
 const secondaryButtonClassName = `${buttonClassName} border border-[#36433a] bg-[#202722] text-[#e7f7e9]`;
 const inputClassName =
     'w-full rounded-[6px] border border-[#36433a] bg-[#101411] p-3 text-sm text-[#e7f7e9] outline-none focus:border-[#68f58a]';
+const customRpcOrigins = ['http://*/*', 'https://*/*'];
 
 const rootRoute = createRootRoute({
     component: () => <Outlet />,
@@ -72,6 +73,18 @@ const keypairFileRoute = createRoute({
     component: KeypairFilePage,
 });
 
+const addRpcRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/add-rpc',
+    component: AddRpcPage,
+});
+
+const customRpcRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/add-rpc/custom',
+    component: CustomRpcPage,
+});
+
 const approvalRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/approval',
@@ -89,6 +102,8 @@ const routeTree = rootRoute.addChildren([
     addKeypairRoute,
     seedPhraseRoute,
     keypairFileRoute,
+    addRpcRoute,
+    customRpcRoute,
     approvalRoute,
 ]);
 
@@ -124,13 +139,13 @@ function WelcomePage() {
     };
 
     return (
-        <WalletFrame eyebrow="PARANOID / DEVNET ONLY" welcome>
+        <WalletFrame eyebrow="PARANOID / SOLANA WALLET" welcome>
             <div>
                 <h1 className="mt-3 mb-2.5 text-[32px] leading-[1.15] font-bold">Paranoid Wallet</h1>
                 <p className="m-0 text-[15px] leading-normal text-[#b7c8ba]">A Solana wallet you never have to trust</p>
             </div>
             <div>
-                <p className={warningClassName}>Disclaimer: Wallet can interact with the Devnet Cluster only</p>
+                <p className={warningClassName}>Use disposable test keys and review the selected RPC before signing.</p>
                 <button className={`${buttonClassName} mt-4 w-full`} onClick={launchApp}>
                     Launch app
                 </button>
@@ -150,7 +165,7 @@ function CreatePasswordPage() {
             setPassword('');
             setConfirmation('');
             const status = await sendMessage<WalletStatus>({ type: 'wallet:status' });
-            await navigate({ to: status.active ? '/wallet' : '/add-keypair' });
+            await navigate({ to: nextWalletPath(status) });
         },
     });
 
@@ -224,7 +239,7 @@ function UnlockPage() {
         onSuccess: async () => {
             setPassword('');
             const status = await sendMessage<WalletStatus>({ type: 'wallet:status' });
-            await navigate({ to: status.active ? '/wallet' : '/add-keypair' });
+            await navigate({ to: nextWalletPath(status) });
         },
     });
 
@@ -277,7 +292,7 @@ function AddKeypairPage() {
             <code className={`${panelClassName} block [overflow-wrap:anywhere] text-[#68f58a]`}>
                 solana-keygen new -o ./&lt;your custom filename&gt;.json
             </code>
-            <p className={warningClassName}>Use this wallet with Devnet assets only.</p>
+            <p className={warningClassName}>Use a disposable keypair that does not hold real assets.</p>
             <div className="mt-6 grid gap-2.5">
                 <button className={buttonClassName} onClick={() => navigate({ to: '/add-keypair/seed-phrase' })}>
                     Import seed phrase
@@ -302,10 +317,8 @@ function SeedPhrasePage() {
             importKeypair.setLocalError('Enter a valid 12 or 24 word seed phrase.');
             return;
         }
-        const seed = mnemonicToSeedSync(normalized);
-        const derived = derivePath("m/44'/501'/0'/0'", bytesToHex(seed));
-        importKeypair.mutate(Array.from(Keypair.fromSeed(derived.key).secretKey), {
-            onSuccess: () => navigate({ to: '/wallet' }),
+        importKeypair.mutate(Array.from(keypairFromMnemonic(normalized).secretKey), {
+            onSuccess: async () => navigate({ to: nextWalletPath(await getWalletStatus()) }),
         });
     };
 
@@ -385,12 +398,152 @@ function KeypairFilePage() {
                 className={`${buttonClassName} mt-4 w-full`}
                 disabled={!secretKey || importKeypair.isPending}
                 onClick={() =>
-                    secretKey && importKeypair.mutate(secretKey, { onSuccess: () => navigate({ to: '/wallet' }) })
+                    secretKey &&
+                    importKeypair.mutate(secretKey, {
+                        onSuccess: async () => navigate({ to: nextWalletPath(await getWalletStatus()) }),
+                    })
                 }
             >
                 Import keypair
             </button>
         </ImportFrame>
+    );
+}
+
+function AddRpcPage() {
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const [permissionError, setPermissionError] = useState('');
+    const selectRpc = useMutation({
+        mutationFn: (id: string) => sendMessage<boolean>({ type: 'wallet:select-rpc', id }),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            await navigate({ to: '/wallet' });
+        },
+    });
+
+    return (
+        <WalletFrame eyebrow="PARANOID / ADD RPC">
+            <h1 className="mt-3 mb-3 text-2xl leading-[1.15] font-bold">Add RPC</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Choose where Paranoid sends Solana requests. You can change this from the account page.
+            </p>
+            <div className="grid gap-2.5">
+                <button
+                    className={buttonClassName}
+                    disabled={selectRpc.isPending}
+                    onClick={() => selectRpc.mutate('localnet')}
+                >
+                    Use Localnet
+                </button>
+                <button
+                    className={buttonClassName}
+                    disabled={selectRpc.isPending}
+                    onClick={() => selectRpc.mutate('devnet')}
+                >
+                    Use Devnet
+                </button>
+                <button
+                    className={secondaryButtonClassName}
+                    disabled={selectRpc.isPending}
+                    onClick={() => selectRpc.mutate('testnet')}
+                >
+                    Use Testnet
+                </button>
+                <button
+                    className={`${secondaryButtonClassName} mt-2`}
+                    disabled={selectRpc.isPending}
+                    onClick={async () => {
+                        setPermissionError('');
+                        try {
+                            await requestCustomRpcAccess();
+                            await navigate({ to: '/add-rpc/custom' });
+                        } catch (error) {
+                            setPermissionError(errorMessage(error));
+                        }
+                    }}
+                >
+                    Use Custom RPC
+                </button>
+            </div>
+            {(permissionError || selectRpc.isError) && (
+                <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
+            )}
+            <p className={warningClassName}>
+                The selected RPC can observe your account activity and submitted transactions.
+            </p>
+        </WalletFrame>
+    );
+}
+
+function CustomRpcPage() {
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const [url, setUrl] = useState('');
+    const [localError, setLocalError] = useState('');
+    const addRpc = useMutation({
+        mutationFn: (value: string) => sendMessage<RpcSummary>({ type: 'wallet:add-rpc', url: value }),
+        onSuccess: async () => {
+            setUrl('');
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            await navigate({ to: '/wallet' });
+        },
+    });
+
+    return (
+        <WalletFrame eyebrow="PARANOID / ADD RPC">
+            <button
+                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
+                onClick={() => navigate({ to: '/add-rpc' })}
+            >
+                &lt; Back
+            </button>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Custom RPC</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                The full URL is encrypted with your wallet password before it is stored.
+            </p>
+            <form
+                onSubmit={async (event) => {
+                    event.preventDefault();
+                    setLocalError('');
+                    try {
+                        const normalized = normalizeRpcUrl(url);
+                        const granted = await chrome.permissions.contains({ origins: customRpcOrigins });
+                        if (!granted) throw new Error('Select Add Custom RPC to allow RPC access first');
+                        addRpc.mutate(normalized);
+                    } catch (error) {
+                        setLocalError(errorMessage(error));
+                    }
+                }}
+            >
+                <label className={labelClassName} htmlFor="rpc-url">
+                    RPC URL
+                </label>
+                <input
+                    id="rpc-url"
+                    className={inputClassName}
+                    type="url"
+                    inputMode="url"
+                    placeholder="https://rpc.example.com"
+                    value={url}
+                    onChange={(event) => {
+                        setUrl(event.target.value);
+                        setLocalError('');
+                    }}
+                    autoFocus
+                />
+                {(localError || addRpc.isError) && (
+                    <p className={errorClassName}>{localError || errorMessage(addRpc.error)}</p>
+                )}
+                <button
+                    className={`${buttonClassName} mt-4 w-full`}
+                    disabled={!url.trim() || addRpc.isPending}
+                    type="submit"
+                >
+                    Add RPC
+                </button>
+            </form>
+        </WalletFrame>
     );
 }
 
@@ -407,6 +560,7 @@ function PopupPage() {
     });
 
     if (!status.isPending && !status.isError && !status.data.active) return <AddKeypairPage />;
+    if (!status.isPending && !status.isError && !status.data.activeRpc) return <AddRpcPage />;
 
     const active = status.data?.active;
 
@@ -436,25 +590,71 @@ function PopupPage() {
                     <option value="__add__">+ Add keypair</option>
                 </select>
             </div>
+            <RpcSelect rpcs={status.data?.rpcs ?? []} active={status.data?.activeRpc ?? null} />
             {status.isError ? (
                 <p className={errorClassName}>{errorMessage(status.error)}</p>
             ) : (
-                <>
-                    <div className="grid grid-cols-2 gap-2.5">
-                        <div>
-                            <p className={labelClassName}>Cluster</p>
-                            <p className={`${panelClassName} capitalize`}>{status.data?.cluster ?? 'Loading...'}</p>
-                        </div>
-                        <div>
-                            <p className={labelClassName}>Balance</p>
-                            <p className={panelClassName}>{formatBalance(status.data?.balance)}</p>
-                        </div>
-                    </div>
-                </>
+                <div>
+                    <p className={labelClassName}>Balance</p>
+                    <p className={panelClassName}>{formatBalance(status.data?.balance)}</p>
+                </div>
             )}
             {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
-            <p className={warningClassName}>Keypairs are encrypted at rest. Use devnet assets only.</p>
+            <p className={warningClassName}>Keypairs and custom RPC URLs are encrypted at rest.</p>
         </WalletFrame>
+    );
+}
+
+function RpcSelect({ rpcs, active }: { rpcs: RpcSummary[]; active: RpcSummary | null }) {
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const [permissionError, setPermissionError] = useState('');
+    const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+    const selectRpc = useMutation({
+        mutationFn: (id: string) => sendMessage<boolean>({ type: 'wallet:select-rpc', id }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wallet-status'] }),
+    });
+
+    return (
+        <div className="mb-5">
+            <label className={labelClassName} htmlFor="active-rpc">
+                Active RPC
+            </label>
+            <select
+                id="active-rpc"
+                className={inputClassName}
+                disabled={!active || selectRpc.isPending || isRequestingPermission}
+                value={active?.id ?? ''}
+                onChange={async (event) => {
+                    if (event.target.value !== '__add__') {
+                        setPermissionError('');
+                        selectRpc.mutate(event.target.value);
+                        return;
+                    }
+                    setPermissionError('');
+                    setIsRequestingPermission(true);
+                    try {
+                        await requestCustomRpcAccess();
+                        await navigate({ to: '/add-rpc/custom' });
+                    } catch (error) {
+                        setPermissionError(errorMessage(error));
+                    } finally {
+                        setIsRequestingPermission(false);
+                    }
+                }}
+            >
+                {rpcs.map((rpc) => (
+                    <option key={rpc.id} value={rpc.id}>
+                        {rpc.name}
+                        {rpc.kind === 'custom' ? ' (Custom)' : ''}
+                    </option>
+                ))}
+                <option value="__add__">+ Add Custom RPC</option>
+            </select>
+            {(permissionError || selectRpc.isError) && (
+                <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
+            )}
+        </div>
     );
 }
 
@@ -477,7 +677,7 @@ function ImportFrame({
             <h1 className="mt-0 mb-5 text-2xl leading-[1.15] font-bold">{title}</h1>
             {children}
             {error && <p className={errorClassName}>{error}</p>}
-            <p className={warningClassName}>Never use a seed phrase or keypair that holds Mainnet assets.</p>
+            <p className={warningClassName}>Never import a seed phrase or keypair that holds real assets.</p>
         </WalletFrame>
     );
 }
@@ -515,7 +715,7 @@ function ApprovalPage() {
     if (request.isError) return <ErrorView message={errorMessage(request.error)} close />;
 
     return (
-        <WalletFrame eyebrow="PARANOID / DEVNET ONLY">
+        <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
             <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">
                 {request.data?.title ?? 'Loading request...'}
             </h1>
@@ -575,7 +775,7 @@ function WalletFrame({
 
 function ErrorView({ message, close = false }: { message: string; close?: boolean }) {
     return (
-        <WalletFrame eyebrow="PARANOID / DEVNET ONLY">
+        <WalletFrame eyebrow="PARANOID / WALLET">
             <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">{message}</h1>
             {close && (
                 <button className={buttonClassName} onClick={() => window.close()}>
@@ -596,8 +796,29 @@ async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
     return response;
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+function getWalletStatus(): Promise<WalletStatus> {
+    return sendMessage<WalletStatus>({ type: 'wallet:status' });
+}
+
+function nextWalletPath(status: WalletStatus): '/add-keypair' | '/add-rpc' | '/wallet' {
+    if (!status.active) return '/add-keypair';
+    return status.activeRpc ? '/wallet' : '/add-rpc';
+}
+
+function normalizeRpcUrl(value: string): string {
+    let url: URL;
+    try {
+        url = new URL(value.trim());
+    } catch {
+        throw new Error('Enter a valid RPC URL');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('RPC URL must use http or https');
+    return url.toString();
+}
+
+async function requestCustomRpcAccess(): Promise<void> {
+    const granted = await chrome.permissions.request({ origins: customRpcOrigins });
+    if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
 }
 
 function truncateAddress(address: string | undefined): string {

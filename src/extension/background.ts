@@ -1,21 +1,28 @@
 import { Connection, Keypair, PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import type { ApprovalDetails, ProviderRequest } from '@/extension/messages';
+import type { SolanaChain } from '@/lib/solana';
 import {
     addKeypair,
+    addRpc,
     getActiveKeypair,
+    getActiveRpc,
     getActiveSigner,
     getVaultStatus,
     listKeypairs,
+    listRpcs,
     selectKeypair,
+    selectRpc,
     setupVault,
     touchVault,
     unlockVault,
 } from '@/extension/keypairs';
 
-const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
 const approvalWindows = new Map<number, string>();
+const MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+const TESTNET_GENESIS_HASH = '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY';
 
 export function setupBackground(): void {
     chrome.windows.onRemoved.addListener((windowId) => {
@@ -110,6 +117,29 @@ export function setupBackground(): void {
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
+
+        if (message?.type === 'wallet:add-rpc') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            resolveRpcChain(message.url)
+                .then((chain) => addRpc(message.url, chain))
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:select-rpc') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            selectRpc(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
     });
 }
 
@@ -122,6 +152,12 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
     const keypair = await getKeypair();
 
     try {
+        const rpc = await requireActiveRpc();
+        validateRequestedChain(request, rpc.chain);
+        if (request.method === 'signAndSendTransaction' && (await resolveRpcChain(rpc.url)) !== rpc.chain) {
+            throw new Error('The active RPC changed clusters after it was added');
+        }
+        const connection = new Connection(rpc.url, 'confirmed');
         switch (request.method) {
             case 'connect': {
                 const onlyIfTrusted = Boolean(
@@ -132,7 +168,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 if (!trusted) {
                     await requireApproval(origin, 'Connect to Paranoid?', [
                         `Account: ${keypair.publicKey.toBase58()}`,
-                        'Network: Solana devnet',
+                        `Network: Solana ${rpc.name}`,
                     ]);
                     await trust(origin);
                 }
@@ -153,7 +189,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
             case 'signTransaction': {
                 await requireTrusted(origin);
                 const transaction = deserialize((request.params as { transaction: number[] }).transaction);
-                await approveTransaction(origin, transaction, 'Sign transaction?');
+                await approveTransaction(origin, transaction, 'Sign transaction?', rpc.name);
                 sign(transaction, keypair);
                 return Array.from(serialize(transaction));
             }
@@ -162,7 +198,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 const transactions = (request.params as { transactions: number[][] }).transactions.map(deserialize);
                 await requireApproval(origin, 'Sign multiple transactions?', [
                     `${transactions.length} transactions`,
-                    'Network: Solana devnet',
+                    `Network: Solana ${rpc.name}`,
                 ]);
                 transactions.forEach((transaction) => sign(transaction, keypair));
                 return transactions.map((transaction) => Array.from(serialize(transaction)));
@@ -174,7 +210,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     options?: SendOptions;
                 };
                 const transaction = deserialize(bytes);
-                await approveTransaction(origin, transaction, 'Sign and send transaction?');
+                await approveTransaction(origin, transaction, 'Sign and send transaction?', rpc.name);
                 sign(transaction, keypair);
                 const simulation =
                     'version' in transaction
@@ -203,19 +239,66 @@ async function getKeypair(): Promise<Keypair> {
     return keypair;
 }
 
+async function requireActiveRpc() {
+    const rpc = await getActiveRpc();
+    if (!rpc) throw new Error('Add an RPC before connecting to Paranoid');
+    return rpc;
+}
+
+function validateRequestedChain(request: ProviderRequest, rpcChain: SolanaChain): void {
+    if (request.method === 'connect' || request.method === 'disconnect') return;
+    const chain = (request.params as { chain?: SolanaChain } | undefined)?.chain;
+    if (!chain) return;
+    if (chain !== rpcChain) throw new Error(`The dapp requested ${chain}, but the active RPC uses ${rpcChain}`);
+}
+
+async function resolveRpcChain(url: string): Promise<SolanaChain> {
+    const genesisHash = await new Connection(url, 'confirmed').getGenesisHash();
+    if (genesisHash === MAINNET_GENESIS_HASH) return 'solana:mainnet';
+    if (genesisHash === DEVNET_GENESIS_HASH) return 'solana:devnet';
+    if (genesisHash === TESTNET_GENESIS_HASH) return 'solana:testnet';
+    return 'solana:localnet';
+}
+
 async function getWalletStatus() {
     touchVault();
-    const [stored, active] = await Promise.all([listKeypairs(), getActiveKeypair()]);
+    const [stored, active, rpcs, activeRpc] = await Promise.all([
+        listKeypairs(),
+        getActiveKeypair(),
+        listRpcs(),
+        getActiveRpc().catch(() => null),
+    ]);
     if (active) {
         const publicKey = active.publicKey;
         return {
             active: { name: active.name, publicKey: active.publicKey },
             wallets: stored.map(({ name, publicKey: address }) => ({ name, publicKey: address })),
-            cluster: 'devnet' as const,
-            balance: await connection.getBalance(new PublicKey(publicKey)).catch(() => null),
+            activeRpc: activeRpc && {
+                id: activeRpc.id,
+                name: activeRpc.name,
+                kind: activeRpc.kind,
+                chain: activeRpc.chain,
+            },
+            rpcs,
+            balance: activeRpc
+                ? await new Connection(activeRpc.url, 'confirmed')
+                      .getBalance(new PublicKey(publicKey))
+                      .catch(() => null)
+                : null,
         };
     }
-    return { active: null, wallets: [], cluster: 'devnet' as const, balance: null };
+    return {
+        active: null,
+        wallets: [],
+        activeRpc: activeRpc && {
+            id: activeRpc.id,
+            name: activeRpc.name,
+            kind: activeRpc.kind,
+            chain: activeRpc.chain,
+        },
+        rpcs,
+        balance: null,
+    };
 }
 
 async function isTrusted(origin: string): Promise<boolean> {
@@ -256,9 +339,10 @@ async function requireApproval(origin: string, title: string, lines: string[]): 
 async function approveTransaction(
     origin: string,
     transaction: Transaction | VersionedTransaction,
-    title: string
+    title: string,
+    rpcName: string
 ): Promise<void> {
-    const lines = ['Network: Solana devnet'];
+    const lines = [`Network: Solana ${rpcName}`];
     if ('version' in transaction) {
         lines.push(`Version: ${transaction.version}`);
         lines.push(`Instructions: ${transaction.message.compiledInstructions.length}`);

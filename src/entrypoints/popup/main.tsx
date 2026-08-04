@@ -16,7 +16,14 @@ async function renderPopup() {
         else {
             const status = (await chrome.runtime.sendMessage({ type: 'wallet:status' })) as
                 WalletStatus | { __error: string };
-            initialPath = !('__error' in status) && status.active ? '/wallet' : '/add-keypair';
+            initialPath =
+                '__error' in status
+                    ? '/wallet'
+                    : !status.active
+                      ? '/add-keypair'
+                      : status.activeRpc
+                        ? '/wallet'
+                        : '/add-rpc';
         }
     }
 

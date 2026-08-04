@@ -30,11 +30,20 @@ export interface WalletSummary {
 export interface WalletStatus {
     active: WalletSummary | null;
     wallets: WalletSummary[];
-    cluster: 'devnet';
+    activeRpc: RpcSummary | null;
+    rpcs: RpcSummary[];
     balance: number | null;
+}
+
+export interface RpcSummary {
+    id: string;
+    name: string;
+    kind: 'localnet' | 'devnet' | 'testnet' | 'custom';
+    chain: SolanaChain;
 }
 
 export interface VaultStatus {
     configured: boolean;
     unlocked: boolean;
 }
+import type { SolanaChain } from '@/lib/solana';
