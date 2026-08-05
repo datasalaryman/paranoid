@@ -46,10 +46,11 @@ interface VaultSettings {
 }
 
 const DATABASE_NAME = 'paranoid-wallet';
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const KEYPAIR_STORE = 'keypairs';
 const RPC_STORE = 'rpcs';
 const SETTINGS_STORE = 'settings';
+const TRANSACTION_QUEUE_STORE = 'transactionQueues';
 const ACTIVE_KEY = 'activeKeypair';
 const ACTIVE_RPC_KEY = 'activeRpc';
 const VAULT_KEY = 'vault';
@@ -487,6 +488,9 @@ function openDatabase(): Promise<IDBDatabase> {
             }
             if (!open.result.objectStoreNames.contains(SETTINGS_STORE)) {
                 open.result.createObjectStore(SETTINGS_STORE, { keyPath: 'key' });
+            }
+            if (!open.result.objectStoreNames.contains(TRANSACTION_QUEUE_STORE)) {
+                open.result.createObjectStore(TRANSACTION_QUEUE_STORE, { keyPath: 'scope' });
             }
         };
         open.onsuccess = () => resolve(open.result);

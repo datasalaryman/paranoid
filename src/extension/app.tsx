@@ -11,9 +11,16 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
-import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
-import type { ActiveRpcSummary, ApprovalDetails, RpcSummary, WalletStatus } from '@/extension/messages';
+import type {
+    ActiveRpcSummary,
+    ApprovalDecision,
+    ApprovalDetails,
+    QueuedTransactionSummary,
+    RpcSummary,
+    WalletStatus,
+} from '@/extension/messages';
 import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
@@ -28,9 +35,49 @@ const inputClassName =
 const customRpcOrigins = ['http://*/*', 'https://*/*'];
 
 const rootRoute = createRootRoute({
-    component: () => <Outlet />,
+    component: WalletRoot,
     notFoundComponent: () => <ErrorView message="This wallet page does not exist." />,
 });
+
+type Toast = { message: string; tone: 'success' | 'error' };
+
+function WalletRoot() {
+    const [toast, setToast] = useState<Toast | null>(null);
+
+    useEffect(() => {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const listener = (event: Event) => {
+            const detail = (event as CustomEvent<Toast>).detail;
+            setToast(detail);
+            if (timeout) clearTimeout(timeout);
+            timeout = setTimeout(() => setToast(null), 4000);
+        };
+        window.addEventListener('paranoid:toast', listener);
+        return () => {
+            window.removeEventListener('paranoid:toast', listener);
+            if (timeout) clearTimeout(timeout);
+        };
+    }, []);
+
+    return (
+        <>
+            <Outlet />
+            {toast && (
+                <div
+                    className={`fixed right-4 bottom-4 left-4 z-50 rounded-[6px] border p-3 text-sm font-semibold shadow-lg ${
+                        toast.tone === 'success'
+                            ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]'
+                            : 'border-[#ff8f8f] bg-[#2a1717] text-[#ffd0d0]'
+                    }`}
+                    role="status"
+                    aria-live="polite"
+                >
+                    {toast.message}
+                </div>
+            )}
+        </>
+    );
+}
 
 const popupRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -95,6 +142,18 @@ const approvalRoute = createRoute({
     component: ApprovalPage,
 });
 
+const transactionQueueRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/transaction-queue',
+    component: TransactionQueuePage,
+});
+
+const queuedTransactionRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/transaction-queue/$transactionId',
+    component: QueuedTransactionPage,
+});
+
 const routeTree = rootRoute.addChildren([
     popupRoute,
     walletRoute,
@@ -106,6 +165,8 @@ const routeTree = rootRoute.addChildren([
     addRpcRoute,
     customRpcRoute,
     approvalRoute,
+    transactionQueueRoute,
+    queuedTransactionRoute,
 ]);
 
 export function ExtensionApp({ initialPath }: { initialPath: string }) {
@@ -559,6 +620,7 @@ function PopupPage() {
         mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wallet-status'] }),
     });
+    const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
 
     if (!status.isPending && !status.isError && !status.data.active) return <AddKeypairPage />;
     if (!status.isPending && !status.isError && !status.data.activeRpc) return <AddRpcPage />;
@@ -573,7 +635,6 @@ function PopupPage() {
                   activeRpc.kind === 'custom' || activeRpc.kind === 'localnet' ? activeRpc.url : undefined
               )
             : undefined;
-
     return (
         <WalletFrame eyebrow="PARANOID / TEST WALLET">
             <div className="mt-3 mb-6 flex items-start justify-between gap-3">
@@ -635,8 +696,144 @@ function PopupPage() {
             )}
             {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
             <p className={warningClassName}>Keypairs and custom RPC URLs are encrypted at rest.</p>
+            <button
+                className="mt-8 flex w-full cursor-pointer items-center justify-between rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left font-semibold text-[#e7f7e9]"
+                onClick={() => navigate({ to: '/transaction-queue' })}
+            >
+                <span>Transaction Queue</span>
+                <span className="min-w-6 rounded-full bg-[#68f58a] px-1.5 py-0.5 text-center text-xs font-bold text-[#081009]">
+                    {queue.data?.length ?? 0}
+                </span>
+            </button>
         </WalletFrame>
     );
+}
+
+function TransactionQueuePage() {
+    const navigate = useNavigate();
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
+    });
+    const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
+
+    return (
+        <WalletFrame eyebrow="PARANOID / TRANSACTION QUEUE">
+            <button
+                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
+                onClick={() => navigate({ to: '/wallet' })}
+            >
+                &lt; Account
+            </button>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Transaction Queue</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Deferred transactions for this keypair and RPC.
+            </p>
+            {(status.isError || queue.isError) && (
+                <p className={errorClassName}>{errorMessage(status.error ?? queue.error)}</p>
+            )}
+            {!queue.isPending && queue.data?.length === 0 && (
+                <p className={panelClassName}>There are no deferred transactions.</p>
+            )}
+            <div className="grid gap-2.5">
+                {queue.data?.map((transaction) => (
+                    <button
+                        key={transaction.id}
+                        className="cursor-pointer rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9]"
+                        onClick={() =>
+                            navigate({
+                                to: '/transaction-queue/$transactionId',
+                                params: { transactionId: transaction.id },
+                            })
+                        }
+                    >
+                        <span className="block font-semibold">{transaction.title}</span>
+                        <span className="mt-1 block truncate text-xs text-[#b7c8ba]">{transaction.origin}</span>
+                        <span className="mt-2 block text-[11px] tracking-[0.08em] text-[#68f58a] uppercase">
+                            {new Date(transaction.createdAt).toLocaleString()}
+                        </span>
+                    </button>
+                ))}
+            </div>
+        </WalletFrame>
+    );
+}
+
+function QueuedTransactionPage() {
+    const { transactionId } = queuedTransactionRoute.useParams();
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const queue = useQuery({
+        queryKey: ['transaction-queue'],
+        queryFn: () => sendMessage<QueuedTransactionSummary[]>({ type: 'queue:list' }),
+    });
+    const transaction = queue.data?.find((item) => item.id === transactionId);
+    const decision = useMutation({
+        mutationFn: (value: 'sign' | 'defer') =>
+            sendMessage<{ signature?: string } | boolean>({ type: `queue:${value}`, id: transactionId }),
+        onSuccess: async (_, value) => {
+            if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
+                showToast('Transaction signed and sent successfully.', 'success');
+            }
+            await queryClient.invalidateQueries({ queryKey: ['transaction-queue'] });
+            await navigate({ to: '/transaction-queue' });
+        },
+        onError: (error, value) => {
+            if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
+                showToast(`Transaction failed: ${errorMessage(error)}`, 'error');
+            }
+        },
+    });
+
+    if (queue.isError) return <ErrorView message={errorMessage(queue.error)} />;
+    if (!queue.isPending && !transaction) return <ErrorView message="Queued transaction not found" />;
+
+    return (
+        <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
+            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">
+                {transaction?.title ?? 'Loading transaction...'}
+            </h1>
+            {transaction && (
+                <>
+                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>{transaction.origin}</p>
+                    <TransactionLines lines={transaction.lines} />
+                </>
+            )}
+            <p className={warningClassName}>Review this transaction before signing.</p>
+            {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
+            <div className="mt-6 grid grid-cols-3 gap-2.5">
+                <button
+                    className={secondaryButtonClassName}
+                    disabled={!transaction || decision.isPending}
+                    onClick={() => navigate({ to: '/transaction-queue' })}
+                >
+                    Cancel
+                </button>
+                <button
+                    className={secondaryButtonClassName}
+                    disabled={!transaction || decision.isPending}
+                    onClick={() => decision.mutate('defer')}
+                >
+                    Defer
+                </button>
+                <button
+                    className={buttonClassName}
+                    disabled={!transaction || decision.isPending}
+                    onClick={() => decision.mutate('sign')}
+                >
+                    Sign
+                </button>
+            </div>
+        </WalletFrame>
+    );
+}
+
+function useTransactionQueue(publicKey?: string, rpcId?: string) {
+    return useQuery({
+        queryKey: ['transaction-queue', publicKey, rpcId],
+        enabled: Boolean(publicKey && rpcId),
+        queryFn: () => sendMessage<QueuedTransactionSummary[]>({ type: 'queue:list' }),
+    });
 }
 
 function RpcSelect({ rpcs, active }: { rpcs: RpcSummary[]; active: ActiveRpcSummary | null }) {
@@ -741,7 +938,8 @@ function ApprovalPage() {
         },
     });
     const decision = useMutation({
-        mutationFn: (approved: boolean) => chrome.runtime.sendMessage({ type: 'approval:resolve', id, approved }),
+        mutationFn: (value: ApprovalDecision) =>
+            chrome.runtime.sendMessage({ type: 'approval:resolve', id, decision: value }),
         onSuccess: () => window.close(),
     });
 
@@ -756,37 +954,52 @@ function ApprovalPage() {
             {request.data && (
                 <>
                     <p className={`${panelClassName} [overflow-wrap:anywhere]`}>{request.data.origin}</p>
-                    <ul className={`${panelClassName} max-h-[220px] list-none overflow-auto`}>
-                        {request.data.lines.map((line, index) => (
-                            <li
-                                className="[overflow-wrap:anywhere] [&+&]:mt-[9px] [&+&]:border-t [&+&]:border-[#29332c] [&+&]:pt-[9px]"
-                                key={`${index}:${line}`}
-                            >
-                                {line}
-                            </li>
-                        ))}
-                    </ul>
+                    <TransactionLines lines={request.data.lines} />
                 </>
             )}
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
-            <div className="mt-6 grid grid-cols-2 gap-2.5">
+            <div className={`mt-6 grid ${request.data?.transaction ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
                 <button
                     className={`${buttonClassName} bg-[#242b26] text-[#e7f7e9]`}
                     disabled={!request.data || decision.isPending}
-                    onClick={() => decision.mutate(false)}
+                    onClick={() => decision.mutate('cancel')}
                 >
-                    Reject
+                    {request.data?.transaction ? 'Cancel' : 'Reject'}
                 </button>
+                {request.data?.transaction && (
+                    <button
+                        className={secondaryButtonClassName}
+                        disabled={decision.isPending}
+                        onClick={() => decision.mutate('defer')}
+                    >
+                        Defer
+                    </button>
+                )}
                 <button
                     className={buttonClassName}
                     disabled={!request.data || decision.isPending}
-                    onClick={() => decision.mutate(true)}
+                    onClick={() => decision.mutate('approve')}
                 >
-                    Approve
+                    {request.data?.transaction ? 'Sign' : 'Approve'}
                 </button>
             </div>
         </WalletFrame>
+    );
+}
+
+function TransactionLines({ lines }: { lines: string[] }) {
+    return (
+        <ul className={`${panelClassName} max-h-[220px] list-none overflow-auto`}>
+            {lines.map((line, index) => (
+                <li
+                    className="[overflow-wrap:anywhere] [&+&]:mt-[9px] [&+&]:border-t [&+&]:border-[#29332c] [&+&]:pt-[9px]"
+                    key={`${index}:${line}`}
+                >
+                    {line}
+                </li>
+            ))}
+        </ul>
     );
 }
 
@@ -822,6 +1035,10 @@ function ErrorView({ message, close = false }: { message: string; close?: boolea
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+function showToast(message: string, tone: Toast['tone']): void {
+    window.dispatchEvent(new CustomEvent<Toast>('paranoid:toast', { detail: { message, tone } }));
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {

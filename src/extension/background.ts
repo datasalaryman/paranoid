@@ -1,6 +1,11 @@
 import { Connection, Keypair, PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
 import nacl from 'tweetnacl';
-import type { ApprovalDetails, ProviderRequest } from '@/extension/messages';
+import type {
+    ApprovalDecision,
+    ApprovalDetails,
+    ProviderRequest,
+    QueuedTransactionSummary,
+} from '@/extension/messages';
 import type { SolanaChain } from '@/lib/solana';
 import {
     addKeypair,
@@ -17,8 +22,18 @@ import {
     touchVault,
     unlockVault,
 } from '@/extension/keypairs';
+import {
+    claimQueuedTransaction,
+    enqueueTransaction,
+    listQueuedTransactions,
+    moveQueuedTransactionToTop,
+    releaseQueuedTransaction,
+    removeQueuedTransaction,
+    type QueuedTransaction,
+    type QueuedTransactionMethod,
+} from '@/extension/transaction-queue';
 
-const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (approved: boolean) => void }>();
+const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (decision: ApprovalDecision) => void }>();
 const approvalWindows = new Map<number, string>();
 const MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
@@ -32,7 +47,7 @@ export function setupBackground(): void {
         const pending = pendingApprovals.get(id);
         if (pending) {
             pendingApprovals.delete(id);
-            pending.resolve(false);
+            pending.resolve('cancel');
         }
     });
 
@@ -53,7 +68,13 @@ export function setupBackground(): void {
             const pending = pendingApprovals.get(message.id);
             if (pending) {
                 pendingApprovals.delete(message.id);
-                pending.resolve(Boolean(message.approved));
+                pending.resolve(
+                    message.decision === 'defer' || message.decision === 'cancel' || message.decision === 'approve'
+                        ? message.decision
+                        : message.approved
+                          ? 'approve'
+                          : 'cancel'
+                );
             }
             sendResponse(true);
             return;
@@ -140,6 +161,39 @@ export function setupBackground(): void {
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
+
+        if (message?.type === 'queue:list') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            getActiveQueue()
+                .then((transactions) => sendResponse(transactions.map(toQueueSummary)))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'queue:sign') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            signQueuedTransaction(message.id)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'queue:defer') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            moveActiveQueuedTransactionToTop(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
     });
 }
 
@@ -188,8 +242,9 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
             }
             case 'signTransaction': {
                 await requireTrusted(origin);
-                const transaction = deserialize((request.params as { transaction: number[] }).transaction);
-                await approveTransaction(origin, transaction, 'Sign transaction?', rpc.name);
+                const bytes = (request.params as { transaction: number[] }).transaction;
+                const transaction = deserialize(bytes);
+                await approveOrDeferTransaction(origin, transaction, bytes, 'signTransaction', undefined, keypair, rpc);
                 sign(transaction, keypair);
                 return Array.from(serialize(transaction));
             }
@@ -210,7 +265,15 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     options?: SendOptions;
                 };
                 const transaction = deserialize(bytes);
-                await approveTransaction(origin, transaction, 'Sign and send transaction?', rpc.name);
+                await approveOrDeferTransaction(
+                    origin,
+                    transaction,
+                    bytes,
+                    'signAndSendTransaction',
+                    options,
+                    keypair,
+                    rpc
+                );
                 sign(transaction, keypair);
                 const simulation =
                     'version' in transaction
@@ -324,7 +387,7 @@ async function requireTrusted(origin: string): Promise<void> {
 
 async function requireApproval(origin: string, title: string, lines: string[]): Promise<void> {
     const id = crypto.randomUUID();
-    const approved = new Promise<boolean>((resolve) => {
+    const decision = new Promise<ApprovalDecision>((resolve) => {
         pendingApprovals.set(id, { details: { id, origin, title, lines }, resolve });
     });
     const approvalWindow = await chrome.windows.create({
@@ -335,15 +398,37 @@ async function requireApproval(origin: string, title: string, lines: string[]): 
         focused: true,
     });
     if (approvalWindow.id !== undefined) approvalWindows.set(approvalWindow.id, id);
-    if (!(await approved)) throw new Error('User rejected the request');
+    if ((await decision) !== 'approve') throw new Error('User rejected the request');
 }
 
-async function approveTransaction(
+async function approveOrDeferTransaction(
     origin: string,
     transaction: Transaction | VersionedTransaction,
-    title: string,
-    rpcName: string
+    bytes: number[],
+    method: QueuedTransactionMethod,
+    options: SendOptions | undefined,
+    keypair: Keypair,
+    rpc: Awaited<ReturnType<typeof requireActiveRpc>>
 ): Promise<void> {
+    const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
+    const lines = transactionLines(transaction, rpc.name);
+    const decision = await requestApproval({ origin, title, lines, transaction: true });
+    if (decision === 'approve') return;
+    if (decision === 'defer') {
+        await enqueueTransaction(keypair.publicKey.toBase58(), rpc.id, {
+            origin,
+            title,
+            lines,
+            transaction: [...bytes],
+            method,
+            options,
+        });
+        throw new Error('Transaction deferred');
+    }
+    throw new Error('User cancelled the request');
+}
+
+function transactionLines(transaction: Transaction | VersionedTransaction, rpcName: string): string[] {
     const lines = [`Network: Solana ${rpcName}`];
     if ('version' in transaction) {
         lines.push(`Version: ${transaction.version}`);
@@ -358,7 +443,77 @@ async function approveTransaction(
         lines.push(`Instructions: ${transaction.instructions.length}`);
         transaction.instructions.forEach((instruction) => lines.push(`Program: ${instruction.programId.toBase58()}`));
     }
-    await requireApproval(origin, title, lines);
+    return lines;
+}
+
+async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<ApprovalDecision> {
+    const id = crypto.randomUUID();
+    const decision = new Promise<ApprovalDecision>((resolve) => {
+        pendingApprovals.set(id, { details: { ...details, id }, resolve });
+    });
+    const approvalWindow = await chrome.windows.create({
+        url: chrome.runtime.getURL(`approval.html?id=${encodeURIComponent(id)}`),
+        type: 'popup',
+        width: 420,
+        height: 560,
+        focused: true,
+    });
+    if (approvalWindow.id !== undefined) approvalWindows.set(approvalWindow.id, id);
+    return decision;
+}
+
+async function getActiveQueue(): Promise<QueuedTransaction[]> {
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc) return [];
+    return listQueuedTransactions(keypair.publicKey, rpc.id);
+}
+
+function toQueueSummary(transaction: QueuedTransaction): QueuedTransactionSummary {
+    const { id, origin, title, lines, method, createdAt } = transaction;
+    return { id, origin, title, lines, method, createdAt };
+}
+
+async function moveActiveQueuedTransactionToTop(id: string): Promise<void> {
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    await moveQueuedTransactionToTop(keypair.publicKey, rpc.id, id);
+}
+
+async function signQueuedTransaction(id: string): Promise<{ signature?: string }> {
+    const [storedKeypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
+    if (!storedKeypair) throw new Error('Select a keypair first');
+    const queued = await claimQueuedTransaction(storedKeypair.publicKey, rpc.id, id);
+
+    let keypair: Keypair | null = null;
+    try {
+        keypair = await getKeypair();
+        if (keypair.publicKey.toBase58() !== storedKeypair.publicKey) {
+            throw new Error('The active keypair changed before signing');
+        }
+        if ((await getActiveRpc())?.id !== rpc.id) throw new Error('The active RPC changed before signing');
+        const transaction = deserialize(queued.transaction);
+        sign(transaction, keypair);
+        let signature: string | undefined;
+        if (queued.method === 'signAndSendTransaction') {
+            if ((await resolveRpcChain(rpc.url)) !== rpc.chain) {
+                throw new Error('The active RPC changed clusters after it was added');
+            }
+            const connection = new Connection(rpc.url, 'confirmed');
+            const simulation =
+                'version' in transaction
+                    ? await connection.simulateTransaction(transaction)
+                    : await connection.simulateTransaction(transaction);
+            if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+            signature = await connection.sendRawTransaction(serialize(transaction), queued.options);
+        }
+        await removeQueuedTransaction(storedKeypair.publicKey, rpc.id, id);
+        return signature ? { signature } : {};
+    } catch (error) {
+        await releaseQueuedTransaction(storedKeypair.publicKey, rpc.id, id).catch(() => undefined);
+        throw error;
+    } finally {
+        keypair?.secretKey.fill(0);
+    }
 }
 
 function deserialize(bytes: number[]): Transaction | VersionedTransaction {

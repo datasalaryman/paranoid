@@ -20,6 +20,18 @@ export interface ApprovalDetails {
     origin: string;
     title: string;
     lines: string[];
+    transaction?: boolean;
+}
+
+export type ApprovalDecision = 'approve' | 'cancel' | 'defer';
+
+export interface QueuedTransactionSummary {
+    id: string;
+    origin: string;
+    title: string;
+    lines: string[];
+    method: 'signTransaction' | 'signAndSendTransaction';
+    createdAt: number;
 }
 
 export interface WalletSummary {
