@@ -32,6 +32,7 @@ export interface QueuedTransactionSummary {
     lines: string[];
     method: 'signTransaction' | 'signAndSendTransaction';
     createdAt: number;
+    expiredBlockhash: boolean;
 }
 
 export interface WalletSummary {

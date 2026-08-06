@@ -27,6 +27,7 @@ import {
     enqueueTransaction,
     listQueuedTransactions,
     moveQueuedTransactionToTop,
+    refreshQueuedTransaction,
     releaseQueuedTransaction,
     removeQueuedTransaction,
     type QueuedTransaction,
@@ -167,8 +168,8 @@ export function setupBackground(): void {
                 sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
                 return;
             }
-            getActiveQueue()
-                .then((transactions) => sendResponse(transactions.map(toQueueSummary)))
+            getActiveQueueSummaries()
+                .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
@@ -190,6 +191,28 @@ export function setupBackground(): void {
                 return;
             }
             moveActiveQueuedTransactionToTop(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'queue:refresh-blockhash') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            refreshActiveQueuedTransactionBlockhash(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'queue:remove') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            removeActiveQueuedTransaction(message.id)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -462,21 +485,64 @@ async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<Ap
     return decision;
 }
 
-async function getActiveQueue(): Promise<QueuedTransaction[]> {
+async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) return [];
-    return listQueuedTransactions(keypair.publicKey, rpc.id);
+    const transactions = await listQueuedTransactions(keypair.publicKey, rpc.id);
+    const connection = new Connection(rpc.url, 'confirmed');
+    const validityByBlockhash = new Map<string, Promise<boolean>>();
+    return Promise.all(
+        transactions.map(async (transaction) => {
+            const blockhash = recentBlockhash(deserialize(transaction.transaction));
+            let validity = validityByBlockhash.get(blockhash);
+            if (!validity) {
+                validity = connection.isBlockhashValid(blockhash).then(({ value }) => value);
+                validityByBlockhash.set(blockhash, validity);
+            }
+            return toQueueSummary(transaction, !(await validity));
+        })
+    );
 }
 
-function toQueueSummary(transaction: QueuedTransaction): QueuedTransactionSummary {
+function toQueueSummary(transaction: QueuedTransaction, expiredBlockhash: boolean): QueuedTransactionSummary {
     const { id, origin, title, lines, method, createdAt } = transaction;
-    return { id, origin, title, lines, method, createdAt };
+    return { id, origin, title, lines, method, createdAt, expiredBlockhash };
 }
 
 async function moveActiveQueuedTransactionToTop(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
     await moveQueuedTransactionToTop(keypair.publicKey, rpc.id, id);
+}
+
+async function removeActiveQueuedTransaction(id: string): Promise<void> {
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    await removeQueuedTransaction(keypair.publicKey, rpc.id, id);
+}
+
+async function refreshActiveQueuedTransactionBlockhash(id: string): Promise<void> {
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
+    if (!keypair) throw new Error('Select a keypair first');
+    const transactions = await listQueuedTransactions(keypair.publicKey, rpc.id);
+    const queued = transactions.find((transaction) => transaction.id === id);
+    if (!queued) throw new Error('Queued transaction not found');
+
+    const connection = new Connection(rpc.url, 'confirmed');
+    const transaction = deserialize(queued.transaction);
+    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    replaceRecentBlockhash(transaction, blockhash);
+    await refreshQueuedTransaction(keypair.publicKey, rpc.id, id, [...serialize(transaction)]);
+}
+
+export function replaceRecentBlockhash(transaction: Transaction | VersionedTransaction, blockhash: string): void {
+    if ('version' in transaction) {
+        transaction.message.recentBlockhash = blockhash;
+        transaction.signatures = transaction.signatures.map((signature) => new Uint8Array(signature.length));
+    } else {
+        transaction.recentBlockhash = blockhash;
+        transaction.signatures.forEach((signature) => (signature.signature = null));
+    }
 }
 
 async function signQueuedTransaction(id: string): Promise<{ signature?: string }> {
@@ -523,6 +589,12 @@ function deserialize(bytes: number[]): Transaction | VersionedTransaction {
     } catch {
         return Transaction.from(serialized);
     }
+}
+
+function recentBlockhash(transaction: Transaction | VersionedTransaction): string {
+    const blockhash = 'version' in transaction ? transaction.message.recentBlockhash : transaction.recentBlockhash;
+    if (!blockhash) throw new Error('Queued transaction does not have a recent blockhash');
+    return blockhash;
 }
 
 function sign(transaction: Transaction | VersionedTransaction, keypair: Keypair): void {

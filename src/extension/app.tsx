@@ -716,6 +716,8 @@ function TransactionQueuePage() {
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
     });
     const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
+    const freshTransactions = queue.data?.filter((transaction) => !transaction.expiredBlockhash) ?? [];
+    const expiredTransactions = queue.data?.filter((transaction) => transaction.expiredBlockhash) ?? [];
 
     return (
         <WalletFrame eyebrow="PARANOID / TRANSACTION QUEUE">
@@ -735,8 +737,28 @@ function TransactionQueuePage() {
             {!queue.isPending && queue.data?.length === 0 && (
                 <p className={panelClassName}>There are no deferred transactions.</p>
             )}
+            <TransactionQueueGroup title="Fresh transactions" transactions={freshTransactions} navigate={navigate} />
+            <TransactionQueueGroup title="Expired blockhash" transactions={expiredTransactions} navigate={navigate} />
+        </WalletFrame>
+    );
+}
+
+function TransactionQueueGroup({
+    title,
+    transactions,
+    navigate,
+}: {
+    title: string;
+    transactions: QueuedTransactionSummary[];
+    navigate: ReturnType<typeof useNavigate>;
+}) {
+    return (
+        <section className="mb-5">
+            <h2 className={labelClassName}>
+                {title} ({transactions.length})
+            </h2>
             <div className="grid gap-2.5">
-                {queue.data?.map((transaction) => (
+                {transactions.map((transaction) => (
                     <button
                         key={transaction.id}
                         className="cursor-pointer rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9]"
@@ -755,7 +777,7 @@ function TransactionQueuePage() {
                     </button>
                 ))}
             </div>
-        </WalletFrame>
+        </section>
     );
 }
 
@@ -769,12 +791,14 @@ function QueuedTransactionPage() {
     });
     const transaction = queue.data?.find((item) => item.id === transactionId);
     const decision = useMutation({
-        mutationFn: (value: 'sign' | 'defer') =>
+        mutationFn: (value: 'sign' | 'defer' | 'refresh-blockhash' | 'remove') =>
             sendMessage<{ signature?: string } | boolean>({ type: `queue:${value}`, id: transactionId }),
         onSuccess: async (_, value) => {
             if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
                 showToast('Transaction signed and sent successfully.', 'success');
             }
+            if (value === 'refresh-blockhash') showToast('Transaction blockhash refreshed.', 'success');
+            if (value === 'remove') showToast('Transaction removed from the queue.', 'success');
             await queryClient.invalidateQueries({ queryKey: ['transaction-queue'] });
             await navigate({ to: '/transaction-queue' });
         },
@@ -801,7 +825,7 @@ function QueuedTransactionPage() {
             )}
             <p className={warningClassName}>Review this transaction before signing.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
-            <div className="mt-6 grid grid-cols-3 gap-2.5">
+            <div className={`mt-6 grid gap-2.5 ${transaction?.expiredBlockhash ? 'grid-cols-2' : 'grid-cols-3'}`}>
                 <button
                     className={secondaryButtonClassName}
                     disabled={!transaction || decision.isPending}
@@ -816,13 +840,32 @@ function QueuedTransactionPage() {
                 >
                     Defer
                 </button>
-                <button
-                    className={buttonClassName}
-                    disabled={!transaction || decision.isPending}
-                    onClick={() => decision.mutate('sign')}
-                >
-                    Sign
-                </button>
+                {transaction?.expiredBlockhash ? (
+                    <button
+                        className={secondaryButtonClassName}
+                        disabled={decision.isPending}
+                        onClick={() => decision.mutate('remove')}
+                    >
+                        Remove
+                    </button>
+                ) : (
+                    <button
+                        className={buttonClassName}
+                        disabled={!transaction || decision.isPending}
+                        onClick={() => decision.mutate('sign')}
+                    >
+                        Sign
+                    </button>
+                )}
+                {transaction?.expiredBlockhash && (
+                    <button
+                        className={buttonClassName}
+                        disabled={decision.isPending}
+                        onClick={() => decision.mutate('refresh-blockhash')}
+                    >
+                        Refresh blockhash
+                    </button>
+                )}
             </div>
         </WalletFrame>
     );

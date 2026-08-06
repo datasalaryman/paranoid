@@ -89,6 +89,20 @@ export async function moveQueuedTransactionToTop(publicKey: string, rpcId: strin
     });
 }
 
+export async function refreshQueuedTransaction(
+    publicKey: string,
+    rpcId: string,
+    id: string,
+    serializedTransaction: number[]
+): Promise<void> {
+    await updateQueue(publicKey, rpcId, (transactions) => {
+        const transaction = transactions.find((item) => item.id === id);
+        if (!transaction) throw new Error('Queued transaction not found');
+        const { processingAt: _, ...queued } = transaction;
+        return [{ ...queued, transaction: serializedTransaction }, ...transactions.filter((item) => item.id !== id)];
+    });
+}
+
 async function updateQueue(
     publicKey: string,
     rpcId: string,
