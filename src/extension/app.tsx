@@ -20,6 +20,7 @@ import type {
     QueuedTransactionSummary,
     RpcSummary,
     WalletStatus,
+    WalletSummary,
 } from '@/extension/messages';
 import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
 
@@ -611,14 +612,9 @@ function CustomRpcPage() {
 
 function PopupPage() {
     const navigate = useNavigate();
-    const queryClient = useQueryClient();
     const status = useQuery({
         queryKey: ['wallet-status'],
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
-    });
-    const selectWallet = useMutation({
-        mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wallet-status'] }),
     });
     const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
 
@@ -636,32 +632,22 @@ function PopupPage() {
               )
             : undefined;
     return (
-        <WalletFrame eyebrow="PARANOID / TEST WALLET">
-            <div className="mt-3 mb-6 flex items-start justify-between gap-3">
-                <div>
-                    <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
-                        {truncateAddress(active?.publicKey)}
-                    </h1>
-                </div>
-                <select
-                    aria-label="Active keypair"
-                    className="max-w-40 rounded-[6px] border border-[#36433a] bg-[#151a17] px-2.5 py-2 text-xs text-[#e7f7e9] outline-none"
-                    disabled={!active || selectWallet.isPending}
-                    value={active?.name ?? ''}
-                    onChange={(event) => {
-                        if (event.target.value === '__add__') void navigate({ to: '/add-keypair' });
-                        else selectWallet.mutate(event.target.value);
-                    }}
-                >
-                    {status.data?.wallets.map((wallet) => (
-                        <option key={wallet.name} value={wallet.name}>
-                            {wallet.name}
-                        </option>
-                    ))}
-                    <option value="__add__">+ Add keypair</option>
-                </select>
+        <WalletFrame
+            eyebrow="PARANOID / TEST WALLET"
+            topNav={
+                <AccountNavigation
+                    wallets={status.data?.wallets ?? []}
+                    activeWallet={active ?? null}
+                    rpcs={status.data?.rpcs ?? []}
+                    activeRpc={activeRpc ?? null}
+                />
+            }
+        >
+            <div className="mt-3 mb-6">
+                <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
+                    {truncateAddress(active?.publicKey)}
+                </h1>
             </div>
-            <RpcSelect rpcs={status.data?.rpcs ?? []} active={activeRpc ?? null} />
             {status.isError ? (
                 <p className={errorClassName}>{errorMessage(status.error)}</p>
             ) : (
@@ -694,7 +680,6 @@ function PopupPage() {
                     )}
                 </div>
             )}
-            {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
             <p className={warningClassName}>Keypairs and custom RPC URLs are encrypted at rest.</p>
             <button
                 className="mt-8 flex w-full cursor-pointer items-center justify-between rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left font-semibold text-[#e7f7e9]"
@@ -879,56 +864,198 @@ function useTransactionQueue(publicKey?: string, rpcId?: string) {
     });
 }
 
-function RpcSelect({ rpcs, active }: { rpcs: RpcSummary[]; active: ActiveRpcSummary | null }) {
+function AccountNavigation({
+    wallets,
+    activeWallet,
+    rpcs,
+    activeRpc,
+}: {
+    wallets: WalletSummary[];
+    activeWallet: WalletSummary | null;
+    rpcs: RpcSummary[];
+    activeRpc: ActiveRpcSummary | null;
+}) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const [openMenu, setOpenMenu] = useState<'keypair' | 'rpc' | null>(null);
     const [permissionError, setPermissionError] = useState('');
     const [isRequestingPermission, setIsRequestingPermission] = useState(false);
+    const selectWallet = useMutation({
+        mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
+        onSuccess: async () => {
+            setOpenMenu(null);
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+        },
+    });
     const selectRpc = useMutation({
         mutationFn: (id: string) => sendMessage<boolean>({ type: 'wallet:select-rpc', id }),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['wallet-status'] }),
+        onSuccess: async () => {
+            setOpenMenu(null);
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+        },
     });
 
+    const open = (menu: 'keypair' | 'rpc') => {
+        setPermissionError('');
+        selectWallet.reset();
+        selectRpc.reset();
+        setOpenMenu(menu);
+    };
+
+    const addCustomRpc = async () => {
+        setPermissionError('');
+        setIsRequestingPermission(true);
+        try {
+            await requestCustomRpcAccess();
+            setOpenMenu(null);
+            await navigate({ to: '/add-rpc/custom' });
+        } catch (error) {
+            setPermissionError(errorMessage(error));
+        } finally {
+            setIsRequestingPermission(false);
+        }
+    };
+
     return (
-        <div className="mb-5">
-            <label className={labelClassName} htmlFor="active-rpc">
-                Active RPC
-            </label>
-            <select
-                id="active-rpc"
-                className={inputClassName}
-                disabled={!active || selectRpc.isPending || isRequestingPermission}
-                value={active?.id ?? ''}
-                onChange={async (event) => {
-                    if (event.target.value !== '__add__') {
-                        setPermissionError('');
-                        selectRpc.mutate(event.target.value);
-                        return;
-                    }
-                    setPermissionError('');
-                    setIsRequestingPermission(true);
-                    try {
-                        await requestCustomRpcAccess();
-                        await navigate({ to: '/add-rpc/custom' });
-                    } catch (error) {
-                        setPermissionError(errorMessage(error));
-                    } finally {
-                        setIsRequestingPermission(false);
-                    }
-                }}
-            >
-                {rpcs.map((rpc) => (
-                    <option key={rpc.id} value={rpc.id}>
-                        {rpc.name}
-                        {rpc.kind === 'custom' ? ' (Custom)' : ''}
-                    </option>
-                ))}
-                <option value="__add__">+ Add Custom RPC</option>
-            </select>
-            {(permissionError || selectRpc.isError) && (
-                <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
+        <>
+            <nav className="grid grid-cols-2 divide-x divide-[#36433a] border-b border-[#36433a] bg-[#151a17]">
+                <AccountNavButton
+                    label="Active Keypair"
+                    value={activeWallet?.name ?? 'Loading...'}
+                    onClick={() => open('keypair')}
+                />
+                <AccountNavButton
+                    label="Active RPC"
+                    value={activeRpc?.name ?? 'Loading...'}
+                    onClick={() => open('rpc')}
+                />
+            </nav>
+            {openMenu === 'keypair' && (
+                <SelectorModal title="Active Keypair" onClose={() => setOpenMenu(null)}>
+                    {wallets.map((wallet) => (
+                        <SelectorButton
+                            key={wallet.name}
+                            label={wallet.name}
+                            active={wallet.name === activeWallet?.name}
+                            disabled={selectWallet.isPending}
+                            onClick={() => selectWallet.mutate(wallet.name)}
+                        />
+                    ))}
+                    <SelectorButton
+                        label="+ Add keypair"
+                        disabled={selectWallet.isPending}
+                        onClick={() => {
+                            setOpenMenu(null);
+                            void navigate({ to: '/add-keypair' });
+                        }}
+                    />
+                    {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
+                </SelectorModal>
             )}
+            {openMenu === 'rpc' && (
+                <SelectorModal title="Active RPC" onClose={() => setOpenMenu(null)}>
+                    {rpcs.map((rpc) => (
+                        <SelectorButton
+                            key={rpc.id}
+                            label={`${rpc.name}${rpc.kind === 'custom' ? ' (Custom)' : ''}`}
+                            active={rpc.id === activeRpc?.id}
+                            disabled={selectRpc.isPending || isRequestingPermission}
+                            onClick={() => selectRpc.mutate(rpc.id)}
+                        />
+                    ))}
+                    <SelectorButton
+                        label="+ Add Custom RPC"
+                        disabled={selectRpc.isPending || isRequestingPermission}
+                        onClick={() => void addCustomRpc()}
+                    />
+                    {(permissionError || selectRpc.isError) && (
+                        <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
+                    )}
+                </SelectorModal>
+            )}
+        </>
+    );
+}
+
+function AccountNavButton({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
+    return (
+        <button
+            className="min-w-0 cursor-pointer border-0 bg-transparent px-3 py-3.5 text-center text-[#e7f7e9] hover:bg-[#202722]"
+            type="button"
+            aria-haspopup="dialog"
+            onClick={onClick}
+        >
+            <span className="block text-[10px] tracking-[0.1em] text-[#68f58a] uppercase">{label}</span>
+            <span className="mt-1 block truncate text-xs font-semibold">{value}</span>
+        </button>
+    );
+}
+
+function SelectorModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+    useEffect(() => {
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', closeOnEscape);
+        return () => window.removeEventListener('keydown', closeOnEscape);
+    }, [onClose]);
+
+    return (
+        <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="selector-modal-title"
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) onClose();
+            }}
+        >
+            <section className="max-h-full w-full max-w-sm overflow-y-auto rounded-[8px] border border-[#36433a] bg-[#101411] p-4 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between gap-4">
+                    <h2 id="selector-modal-title" className="m-0 text-lg font-bold">
+                        {title}
+                    </h2>
+                    <button
+                        className="cursor-pointer border-0 bg-transparent p-1 text-xl leading-none text-[#b7c8ba]"
+                        type="button"
+                        aria-label={`Close ${title}`}
+                        onClick={onClose}
+                    >
+                        &times;
+                    </button>
+                </div>
+                <div className="grid gap-2">{children}</div>
+            </section>
         </div>
+    );
+}
+
+function SelectorButton({
+    label,
+    active = false,
+    disabled = false,
+    onClick,
+}: {
+    label: string;
+    active?: boolean;
+    disabled?: boolean;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-[6px] border p-3 text-left text-sm disabled:cursor-wait disabled:opacity-45 ${
+                active
+                    ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]'
+                    : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9] hover:bg-[#202722]'
+            }`}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={onClick}
+        >
+            <span className="truncate font-semibold">{label}</span>
+            {active && <span className="text-[10px] tracking-[0.08em] uppercase">Active</span>}
+        </button>
     );
 }
 
@@ -1050,11 +1177,25 @@ function WalletFrame({
     eyebrow,
     children,
     welcome = false,
+    topNav,
 }: {
     eyebrow: string;
     children: ReactNode;
     welcome?: boolean;
+    topNav?: ReactNode;
 }) {
+    if (topNav) {
+        return (
+            <main>
+                {topNav}
+                <div className="p-7">
+                    <p className={labelClassName}>{eyebrow}</p>
+                    {children}
+                </div>
+            </main>
+        );
+    }
+
     return (
         <main className={welcome ? 'flex min-h-[460px] flex-col justify-between p-7' : 'p-7'}>
             <p className={`${labelClassName} ${welcome ? 'mb-auto' : ''}`}>{eyebrow}</p>
