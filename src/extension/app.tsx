@@ -931,7 +931,7 @@ function AccountNavigation({
                 />
             </nav>
             {openMenu === 'keypair' && (
-                <SelectorModal title="Active Keypair" onClose={() => setOpenMenu(null)}>
+                <SelectorDrawer title="Active Keypair" onClose={() => setOpenMenu(null)}>
                     {wallets.map((wallet) => (
                         <SelectorButton
                             key={wallet.name}
@@ -950,10 +950,10 @@ function AccountNavigation({
                         }}
                     />
                     {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
-                </SelectorModal>
+                </SelectorDrawer>
             )}
             {openMenu === 'rpc' && (
-                <SelectorModal title="Active RPC" onClose={() => setOpenMenu(null)}>
+                <SelectorDrawer title="Active RPC" onClose={() => setOpenMenu(null)}>
                     {rpcs.map((rpc) => (
                         <SelectorButton
                             key={rpc.id}
@@ -971,7 +971,7 @@ function AccountNavigation({
                     {(permissionError || selectRpc.isError) && (
                         <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
                     )}
-                </SelectorModal>
+                </SelectorDrawer>
             )}
         </>
     );
@@ -991,7 +991,7 @@ function AccountNavButton({ label, value, onClick }: { label: string; value: str
     );
 }
 
-function SelectorModal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+function SelectorDrawer({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
     useEffect(() => {
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose();
@@ -1002,17 +1002,17 @@ function SelectorModal({ title, onClose, children }: { title: string; onClose: (
 
     return (
         <div
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-5"
+            className="fixed inset-0 z-40 bg-black/70 transition-opacity duration-300 ease-out starting:opacity-0 motion-reduce:transition-none"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="selector-modal-title"
+            aria-labelledby="selector-drawer-title"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose();
             }}
         >
-            <section className="max-h-full w-full max-w-sm overflow-y-auto rounded-[8px] border border-[#36433a] bg-[#101411] p-4 shadow-2xl">
+            <section className="max-h-[85vh] w-full translate-y-0 overflow-y-auto overscroll-contain rounded-b-[8px] border-x border-b border-[#36433a] bg-[#101411] p-4 shadow-2xl transition-transform duration-300 ease-out starting:-translate-y-full motion-reduce:transition-none">
                 <div className="mb-3 flex items-center justify-between gap-4">
-                    <h2 id="selector-modal-title" className="m-0 text-lg font-bold">
+                    <h2 id="selector-drawer-title" className="m-0 text-lg font-bold">
                         {title}
                     </h2>
                     <button
