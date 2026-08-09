@@ -16,6 +16,8 @@ import {
     getVaultStatus,
     listKeypairs,
     listRpcs,
+    removeKeypair,
+    renameKeypair,
     selectKeypair,
     selectRpc,
     setupVault,
@@ -135,6 +137,28 @@ export function setupBackground(): void {
                 return;
             }
             selectKeypair(message.name)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:rename') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            renameKeypair(message.name, message.label)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:remove') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            removeKeypair(message.name)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -357,8 +381,8 @@ async function getWalletStatus() {
     if (active) {
         const publicKey = active.publicKey;
         return {
-            active: { name: active.name, publicKey: active.publicKey },
-            wallets: stored.map(({ name, publicKey: address }) => ({ name, publicKey: address })),
+            active: { name: active.name, label: active.label ?? active.name, publicKey: active.publicKey },
+            wallets: stored.map(({ name, label, publicKey }) => ({ name, label: label ?? name, publicKey })),
             activeRpc: activeRpc && {
                 id: activeRpc.id,
                 name: activeRpc.name,

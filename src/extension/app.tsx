@@ -122,6 +122,12 @@ const keypairFileRoute = createRoute({
     component: KeypairFilePage,
 });
 
+const renameKeypairRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/keypairs/$keypairName/rename',
+    component: RenameKeypairPage,
+});
+
 const addRpcRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/add-rpc',
@@ -163,6 +169,7 @@ const routeTree = rootRoute.addChildren([
     addKeypairRoute,
     seedPhraseRoute,
     keypairFileRoute,
+    renameKeypairRoute,
     addRpcRoute,
     customRpcRoute,
     approvalRoute,
@@ -470,6 +477,120 @@ function KeypairFilePage() {
                 Import keypair
             </button>
         </ImportFrame>
+    );
+}
+
+function RenameKeypairPage() {
+    const { keypairName } = renameKeypairRoute.useParams();
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: getWalletStatus,
+    });
+    const wallet = status.data?.wallets.find(({ name }) => name === keypairName);
+    const [label, setLabel] = useState('');
+    const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+    const rename = useMutation({
+        mutationFn: (value: string) => sendMessage<boolean>({ type: 'wallet:rename', name: keypairName, label: value }),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            showToast('Keypair label renamed.', 'success');
+            await navigate({ to: '/wallet' });
+        },
+    });
+    const remove = useMutation({
+        mutationFn: () => sendMessage<boolean>({ type: 'wallet:remove', name: keypairName }),
+        onSuccess: async () => {
+            queryClient.removeQueries({ queryKey: ['transaction-queue'] });
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            showToast('Keypair removed.', 'success');
+            await navigate({ to: nextWalletPath(await getWalletStatus()) });
+        },
+    });
+
+    useEffect(() => {
+        if (wallet) setLabel(wallet.label);
+    }, [wallet]);
+
+    if (status.isError) return <ErrorView message={errorMessage(status.error)} />;
+    if (!status.isPending && !wallet) return <ErrorView message="Keypair not found" />;
+
+    return (
+        <WalletFrame eyebrow="PARANOID / KEYPAIR SETTINGS">
+            <button
+                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
+                onClick={() => navigate({ to: '/wallet' })}
+            >
+                &lt; Back
+            </button>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Keypair settings</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Choose a label that makes this keypair easy to identify.
+            </p>
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    if (label.trim()) rename.mutate(label);
+                }}
+            >
+                <label className={labelClassName} htmlFor="keypair-label">
+                    Label
+                </label>
+                <input
+                    id="keypair-label"
+                    className={inputClassName}
+                    maxLength={40}
+                    value={label}
+                    onChange={(event) => setLabel(event.target.value)}
+                    autoFocus
+                />
+                {wallet && <p className={`${panelClassName} truncate text-xs text-[#b7c8ba]`}>{wallet.publicKey}</p>}
+                {rename.isError && <p className={errorClassName}>{errorMessage(rename.error)}</p>}
+                <button
+                    className={`${buttonClassName} mt-4 w-full`}
+                    disabled={!wallet || !label.trim() || label.trim() === wallet.label || rename.isPending}
+                    type="submit"
+                >
+                    Save label
+                </button>
+            </form>
+            <section className="mt-8 border-t border-[#36433a] pt-5">
+                <h2 className="m-0 text-sm font-bold text-[#ff8f8f]">Remove keypair</h2>
+                <p className="my-3 text-xs leading-normal text-[#b7c8ba]">
+                    This permanently removes the encrypted keypair and its queued transactions from this browser.
+                </p>
+                {remove.isError && <p className={errorClassName}>{errorMessage(remove.error)}</p>}
+                {confirmingRemoval ? (
+                    <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                            className={secondaryButtonClassName}
+                            disabled={remove.isPending}
+                            type="button"
+                            onClick={() => setConfirmingRemoval(false)}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            className={`${buttonClassName} bg-[#ff8f8f] text-[#240909]`}
+                            disabled={!wallet || remove.isPending}
+                            type="button"
+                            onClick={() => remove.mutate()}
+                        >
+                            Remove permanently
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        className="w-full cursor-pointer rounded-sm border border-[#7d3f3f] bg-[#2a1717] p-[13px] font-bold text-[#ffb3b3] hover:bg-[#361b1b]"
+                        type="button"
+                        onClick={() => setConfirmingRemoval(true)}
+                    >
+                        Remove keypair
+                    </button>
+                )}
+            </section>
+        </WalletFrame>
     );
 }
 
@@ -921,7 +1042,7 @@ function AccountNavigation({
             <nav className="grid grid-cols-2 divide-x divide-[#36433a] border-b border-[#36433a] bg-[#151a17]">
                 <AccountNavButton
                     label="Active Keypair"
-                    value={activeWallet?.name ?? 'Loading...'}
+                    value={activeWallet?.label ?? 'Loading...'}
                     onClick={() => open('keypair')}
                 />
                 <AccountNavButton
@@ -933,12 +1054,19 @@ function AccountNavigation({
             {openMenu === 'keypair' && (
                 <SelectorDrawer title="Active Keypair" onClose={() => setOpenMenu(null)}>
                     {wallets.map((wallet) => (
-                        <SelectorButton
+                        <KeypairSelectorRow
                             key={wallet.name}
-                            label={wallet.name}
+                            wallet={wallet}
                             active={wallet.name === activeWallet?.name}
                             disabled={selectWallet.isPending}
-                            onClick={() => selectWallet.mutate(wallet.name)}
+                            onSelect={() => selectWallet.mutate(wallet.name)}
+                            onRename={() => {
+                                setOpenMenu(null);
+                                void navigate({
+                                    to: '/keypairs/$keypairName/rename',
+                                    params: { keypairName: wallet.name },
+                                });
+                            }}
                         />
                     ))}
                     <SelectorButton
@@ -974,6 +1102,52 @@ function AccountNavigation({
                 </SelectorDrawer>
             )}
         </>
+    );
+}
+
+function KeypairSelectorRow({
+    wallet,
+    active,
+    disabled,
+    onSelect,
+    onRename,
+}: {
+    wallet: WalletSummary;
+    active: boolean;
+    disabled: boolean;
+    onSelect: () => void;
+    onRename: () => void;
+}) {
+    return (
+        <div
+            className={`flex overflow-hidden rounded-[6px] border ${
+                active ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]' : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9]'
+            }`}
+        >
+            <button
+                className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-3 text-left text-sm hover:bg-[#202722] disabled:cursor-wait disabled:opacity-45"
+                type="button"
+                disabled={disabled}
+                aria-pressed={active}
+                onClick={onSelect}
+            >
+                <span className="block truncate font-semibold">{wallet.label}</span>
+                {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
+            </button>
+            <button
+                className="flex w-11 shrink-0 cursor-pointer items-center justify-center border-0 border-l border-[#36433a] bg-transparent text-[#b7c8ba] hover:bg-[#202722] hover:text-[#e7f7e9] disabled:cursor-wait disabled:opacity-45"
+                type="button"
+                disabled={disabled}
+                aria-label={`Rename ${wallet.label}`}
+                onClick={onRename}
+            >
+                <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <circle cx="4" cy="10" r="1.5" />
+                    <circle cx="10" cy="10" r="1.5" />
+                    <circle cx="16" cy="10" r="1.5" />
+                </svg>
+            </button>
+        </div>
     );
 }
 

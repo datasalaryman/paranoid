@@ -4,6 +4,7 @@ import type { SolanaChain } from '@/lib/solana';
 
 export interface StoredKeypair {
     name: string;
+    label?: string;
     publicKey: string;
     encryptedSecretKey: EncryptedValue;
     createdAt: number;
@@ -254,6 +255,63 @@ export async function selectKeypair(name: string): Promise<void> {
     const exists = await request<StoredKeypair | undefined>(transaction.objectStore(KEYPAIR_STORE).get(name));
     if (!exists) throw new Error('Keypair not found');
     transaction.objectStore(SETTINGS_STORE).put({ key: ACTIVE_KEY, value: name });
+    await transactionDone(transaction);
+    database.close();
+}
+
+export async function renameKeypair(name: string, value: string): Promise<void> {
+    touchVault();
+    const label = value.trim();
+    if (!label) throw new Error('Enter a keypair label');
+    if (label.length > 40) throw new Error('Keypair labels must be 40 characters or fewer');
+
+    const database = await openDatabase();
+    const transaction = database.transaction(KEYPAIR_STORE, 'readwrite');
+    const store = transaction.objectStore(KEYPAIR_STORE);
+    const stored = await request<StoredKeypair | undefined>(store.get(name));
+    if (!stored) {
+        database.close();
+        throw new Error('Keypair not found');
+    }
+    store.put({ ...stored, label });
+    await transactionDone(transaction);
+    database.close();
+}
+
+export async function removeKeypair(name: string): Promise<void> {
+    touchVault();
+    const database = await openDatabase();
+    const transaction = database.transaction([KEYPAIR_STORE, SETTINGS_STORE, TRANSACTION_QUEUE_STORE], 'readwrite');
+    const keypairs = transaction.objectStore(KEYPAIR_STORE);
+    const settings = transaction.objectStore(SETTINGS_STORE);
+    const queues = transaction.objectStore(TRANSACTION_QUEUE_STORE);
+    const [stored, allKeypairs, activeSetting, queueKeys] = await Promise.all([
+        request<StoredKeypair | undefined>(keypairs.get(name)),
+        request<StoredKeypair[]>(keypairs.getAll()),
+        request<{ key: string; value: string } | undefined>(settings.get(ACTIVE_KEY)),
+        request<IDBValidKey[]>(queues.getAllKeys()),
+    ]);
+    if (!stored) {
+        database.close();
+        throw new Error('Keypair not found');
+    }
+
+    const remaining = allKeypairs
+        .filter((keypair) => keypair.name !== name)
+        .sort((left, right) => left.createdAt - right.createdAt);
+    keypairs.delete(name);
+    if (activeSetting?.value === name) {
+        const next = remaining[0];
+        if (next) settings.put({ key: ACTIVE_KEY, value: next.name });
+        else settings.delete(ACTIVE_KEY);
+    }
+    if (!remaining.some((keypair) => keypair.publicKey === stored.publicKey)) {
+        const queuePrefix = `${stored.publicKey}:`;
+        queueKeys.forEach((key) => {
+            if (typeof key === 'string' && key.startsWith(queuePrefix)) queues.delete(key);
+        });
+    }
+
     await transactionDone(transaction);
     database.close();
 }

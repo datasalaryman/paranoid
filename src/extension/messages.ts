@@ -37,6 +37,7 @@ export interface QueuedTransactionSummary {
 
 export interface WalletSummary {
     name: string;
+    label: string;
     publicKey: string;
 }
 
