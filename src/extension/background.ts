@@ -13,16 +13,19 @@ import {
     getActiveKeypair,
     getActiveRpc,
     getActiveSigner,
+    getRpc,
     getVaultStatus,
     listKeypairs,
     listRpcs,
     removeKeypair,
+    removeRpc,
     renameKeypair,
     selectKeypair,
     selectRpc,
     setupVault,
     touchVault,
     unlockVault,
+    updateRpc,
 } from '@/extension/keypairs';
 import {
     claimQueuedTransaction,
@@ -182,6 +185,40 @@ export function setupBackground(): void {
                 return;
             }
             selectRpc(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:get-rpc') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            getRpc(message.id)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:update-rpc') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            resolveRpcChain(message.url)
+                .then((chain) => updateRpc(message.id, message.label, message.url, chain))
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:remove-rpc') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            removeRpc(message.id)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;

@@ -140,6 +140,12 @@ const customRpcRoute = createRoute({
     component: CustomRpcPage,
 });
 
+const rpcSettingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/rpcs/$rpcId/settings',
+    component: RpcSettingsPage,
+});
+
 const approvalRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/approval',
@@ -172,6 +178,7 @@ const routeTree = rootRoute.addChildren([
     renameKeypairRoute,
     addRpcRoute,
     customRpcRoute,
+    rpcSettingsRoute,
     approvalRoute,
     transactionQueueRoute,
     queuedTransactionRoute,
@@ -731,6 +738,149 @@ function CustomRpcPage() {
     );
 }
 
+function RpcSettingsPage() {
+    const { rpcId } = rpcSettingsRoute.useParams();
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const rpc = useQuery({
+        queryKey: ['rpc', rpcId],
+        queryFn: () => sendMessage<ActiveRpcSummary>({ type: 'wallet:get-rpc', id: rpcId }),
+    });
+    const [label, setLabel] = useState('');
+    const [url, setUrl] = useState('');
+    const [localError, setLocalError] = useState('');
+    const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+    const update = useMutation({
+        mutationFn: ({ label, url }: { label: string; url: string }) =>
+            sendMessage<boolean>({ type: 'wallet:update-rpc', id: rpcId, label, url }),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            queryClient.removeQueries({ queryKey: ['rpc', rpcId] });
+            showToast('Custom RPC updated.', 'success');
+            await navigate({ to: '/wallet' });
+        },
+    });
+    const remove = useMutation({
+        mutationFn: () => sendMessage<boolean>({ type: 'wallet:remove-rpc', id: rpcId }),
+        onSuccess: async () => {
+            queryClient.removeQueries({ queryKey: ['rpc', rpcId] });
+            queryClient.removeQueries({ queryKey: ['transaction-queue'] });
+            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            showToast('Custom RPC removed.', 'success');
+            await navigate({ to: '/wallet' });
+        },
+    });
+
+    useEffect(() => {
+        if (!rpc.data) return;
+        setLabel(rpc.data.name);
+        setUrl(rpc.data.url);
+    }, [rpc.data]);
+
+    if (rpc.isError) return <ErrorView message={errorMessage(rpc.error)} />;
+
+    const unchanged = label.trim() === rpc.data?.name && url.trim() === rpc.data?.url;
+    return (
+        <WalletFrame eyebrow="PARANOID / RPC SETTINGS">
+            <button
+                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
+                onClick={() => navigate({ to: '/wallet' })}
+            >
+                &lt; Back
+            </button>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Custom RPC settings</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Update the label or endpoint. Paranoid verifies the endpoint's Solana cluster before saving it.
+            </p>
+            <form
+                onSubmit={async (event) => {
+                    event.preventDefault();
+                    setLocalError('');
+                    try {
+                        const normalized = normalizeRpcUrl(url);
+                        const granted = await chrome.permissions.contains({ origins: customRpcOrigins });
+                        if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
+                        update.mutate({ label, url: normalized });
+                    } catch (error) {
+                        setLocalError(errorMessage(error));
+                    }
+                }}
+            >
+                <label className={labelClassName} htmlFor="rpc-label">
+                    Label
+                </label>
+                <input
+                    id="rpc-label"
+                    className={inputClassName}
+                    maxLength={40}
+                    value={label}
+                    onChange={(event) => setLabel(event.target.value)}
+                    autoFocus
+                />
+                <label className={labelClassName} htmlFor="rpc-settings-url">
+                    RPC URL
+                </label>
+                <input
+                    id="rpc-settings-url"
+                    className={inputClassName}
+                    type="url"
+                    inputMode="url"
+                    value={url}
+                    onChange={(event) => {
+                        setUrl(event.target.value);
+                        setLocalError('');
+                    }}
+                />
+                {(localError || update.isError) && (
+                    <p className={errorClassName}>{localError || errorMessage(update.error)}</p>
+                )}
+                <button
+                    className={`${buttonClassName} mt-4 w-full`}
+                    disabled={!rpc.data || !label.trim() || !url.trim() || unchanged || update.isPending}
+                    type="submit"
+                >
+                    Save RPC
+                </button>
+            </form>
+            <section className="mt-8 border-t border-[#36433a] pt-5">
+                <h2 className="m-0 text-sm font-bold text-[#ff8f8f]">Remove custom RPC</h2>
+                <p className="my-3 text-xs leading-normal text-[#b7c8ba]">
+                    This permanently removes the encrypted URL and its queued transactions from this browser.
+                </p>
+                {remove.isError && <p className={errorClassName}>{errorMessage(remove.error)}</p>}
+                {confirmingRemoval ? (
+                    <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                            className={secondaryButtonClassName}
+                            disabled={remove.isPending}
+                            type="button"
+                            onClick={() => setConfirmingRemoval(false)}
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            className={`${buttonClassName} bg-[#ff8f8f] text-[#240909]`}
+                            disabled={!rpc.data || remove.isPending}
+                            type="button"
+                            onClick={() => remove.mutate()}
+                        >
+                            Remove permanently
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        className="w-full cursor-pointer rounded-sm border border-[#7d3f3f] bg-[#2a1717] p-[13px] font-bold text-[#ffb3b3] hover:bg-[#361b1b]"
+                        type="button"
+                        onClick={() => setConfirmingRemoval(true)}
+                    >
+                        Remove custom RPC
+                    </button>
+                )}
+            </section>
+        </WalletFrame>
+    );
+}
+
 function PopupPage() {
     const navigate = useNavigate();
     const status = useQuery({
@@ -1082,15 +1232,29 @@ function AccountNavigation({
             )}
             {openMenu === 'rpc' && (
                 <SelectorDrawer title="Active RPC" onClose={() => setOpenMenu(null)}>
-                    {rpcs.map((rpc) => (
-                        <SelectorButton
-                            key={rpc.id}
-                            label={`${rpc.name}${rpc.kind === 'custom' ? ' (Custom)' : ''}`}
-                            active={rpc.id === activeRpc?.id}
-                            disabled={selectRpc.isPending || isRequestingPermission}
-                            onClick={() => selectRpc.mutate(rpc.id)}
-                        />
-                    ))}
+                    {rpcs.map((rpc) =>
+                        rpc.kind === 'custom' ? (
+                            <RpcSelectorRow
+                                key={rpc.id}
+                                rpc={rpc}
+                                active={rpc.id === activeRpc?.id}
+                                disabled={selectRpc.isPending || isRequestingPermission}
+                                onSelect={() => selectRpc.mutate(rpc.id)}
+                                onSettings={() => {
+                                    setOpenMenu(null);
+                                    void navigate({ to: '/rpcs/$rpcId/settings', params: { rpcId: rpc.id } });
+                                }}
+                            />
+                        ) : (
+                            <SelectorButton
+                                key={rpc.id}
+                                label={rpc.name}
+                                active={rpc.id === activeRpc?.id}
+                                disabled={selectRpc.isPending || isRequestingPermission}
+                                onClick={() => selectRpc.mutate(rpc.id)}
+                            />
+                        )
+                    )}
                     <SelectorButton
                         label="+ Add Custom RPC"
                         disabled={selectRpc.isPending || isRequestingPermission}
@@ -1140,6 +1304,52 @@ function KeypairSelectorRow({
                 disabled={disabled}
                 aria-label={`Rename ${wallet.label}`}
                 onClick={onRename}
+            >
+                <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <circle cx="4" cy="10" r="1.5" />
+                    <circle cx="10" cy="10" r="1.5" />
+                    <circle cx="16" cy="10" r="1.5" />
+                </svg>
+            </button>
+        </div>
+    );
+}
+
+function RpcSelectorRow({
+    rpc,
+    active,
+    disabled,
+    onSelect,
+    onSettings,
+}: {
+    rpc: RpcSummary;
+    active: boolean;
+    disabled: boolean;
+    onSelect: () => void;
+    onSettings: () => void;
+}) {
+    return (
+        <div
+            className={`flex overflow-hidden rounded-[6px] border ${
+                active ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]' : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9]'
+            }`}
+        >
+            <button
+                className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-3 text-left text-sm hover:bg-[#202722] disabled:cursor-wait disabled:opacity-45"
+                type="button"
+                disabled={disabled}
+                aria-pressed={active}
+                onClick={onSelect}
+            >
+                <span className="block truncate font-semibold">{rpc.name} (Custom)</span>
+                {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
+            </button>
+            <button
+                className="flex w-11 shrink-0 cursor-pointer items-center justify-center border-0 border-l border-[#36433a] bg-transparent text-[#b7c8ba] hover:bg-[#202722] hover:text-[#e7f7e9] disabled:cursor-wait disabled:opacity-45"
+                type="button"
+                disabled={disabled}
+                aria-label={`Edit ${rpc.name}`}
+                onClick={onSettings}
             >
                 <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <circle cx="4" cy="10" r="1.5" />

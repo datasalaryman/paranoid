@@ -352,6 +352,83 @@ export async function addRpc(value: string, chain: SolanaChain): Promise<RpcSumm
     return { id, name, kind: 'custom', chain };
 }
 
+export async function getRpc(id: string): Promise<ActiveRpc> {
+    const database = await openDatabase();
+    const stored = await request<StoredRpc | undefined>(database.transaction(RPC_STORE).objectStore(RPC_STORE).get(id));
+    database.close();
+    if (!stored) throw new Error('Custom RPC not found');
+
+    const plaintext = await decrypt(requireUnlockedVault(), stored.encryptedUrl, rpcAdditionalData(stored));
+    try {
+        return {
+            id: stored.id,
+            name: stored.name,
+            kind: 'custom',
+            chain: stored.chain,
+            url: new TextDecoder().decode(plaintext),
+        };
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+export async function updateRpc(id: string, value: string, urlValue: string, chain: SolanaChain): Promise<void> {
+    const key = requireUnlockedVault();
+    const name = value.trim();
+    if (!name) throw new Error('Enter an RPC label');
+    if (name.length > 40) throw new Error('RPC labels must be 40 characters or fewer');
+    const url = normalizeRpcUrl(urlValue);
+
+    const database = await openDatabase();
+    const store = database.transaction(RPC_STORE).objectStore(RPC_STORE);
+    const stored = await request<StoredRpc | undefined>(store.get(id));
+    if (!stored) {
+        database.close();
+        throw new Error('Custom RPC not found');
+    }
+
+    const metadata = { id: stored.id, name, chain };
+    const plaintext = new TextEncoder().encode(url);
+    let encryptedUrl: EncryptedValue;
+    try {
+        encryptedUrl = await encrypt(key, plaintext, rpcAdditionalData(metadata));
+    } finally {
+        plaintext.fill(0);
+    }
+
+    const transaction = database.transaction(RPC_STORE, 'readwrite');
+    transaction.objectStore(RPC_STORE).put({ ...stored, ...metadata, encryptedUrl });
+    await transactionDone(transaction);
+    database.close();
+}
+
+export async function removeRpc(id: string): Promise<void> {
+    touchVault();
+    const database = await openDatabase();
+    const transaction = database.transaction([RPC_STORE, SETTINGS_STORE, TRANSACTION_QUEUE_STORE], 'readwrite');
+    const rpcs = transaction.objectStore(RPC_STORE);
+    const settings = transaction.objectStore(SETTINGS_STORE);
+    const queues = transaction.objectStore(TRANSACTION_QUEUE_STORE);
+    const [stored, activeSetting, queueKeys] = await Promise.all([
+        request<StoredRpc | undefined>(rpcs.get(id)),
+        request<{ key: string; value: string } | undefined>(settings.get(ACTIVE_RPC_KEY)),
+        request<IDBValidKey[]>(queues.getAllKeys()),
+    ]);
+    if (!stored) {
+        database.close();
+        throw new Error('Custom RPC not found');
+    }
+
+    rpcs.delete(id);
+    if (activeSetting?.value === id) settings.put({ key: ACTIVE_RPC_KEY, value: BUILT_IN_RPCS[0]!.id });
+    queueKeys.forEach((key) => {
+        if (typeof key === 'string' && key.endsWith(`:${id}`)) queues.delete(key);
+    });
+
+    await transactionDone(transaction);
+    database.close();
+}
+
 export async function selectRpc(id: string): Promise<void> {
     touchVault();
     const builtIn = BUILT_IN_RPCS.some((rpc) => rpc.id === id);
