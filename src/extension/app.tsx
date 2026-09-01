@@ -12,6 +12,7 @@ import {
     useNavigate,
 } from '@tanstack/react-router';
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { TransactionInformation } from '@/extension/components/transaction-information';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
 import type {
     ActiveRpcSummary,
@@ -1041,11 +1042,11 @@ function QueuedTransactionPage() {
     const { transactionId } = queuedTransactionRoute.useParams();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const queue = useQuery({
-        queryKey: ['transaction-queue'],
-        queryFn: () => sendMessage<QueuedTransactionSummary[]>({ type: 'queue:list' }),
+    const request = useQuery({
+        queryKey: ['transaction-queue', transactionId],
+        queryFn: () => sendMessage<QueuedTransactionSummary>({ type: 'queue:get', id: transactionId }),
     });
-    const transaction = queue.data?.find((item) => item.id === transactionId);
+    const transaction = request.data;
     const decision = useMutation({
         mutationFn: (value: 'sign' | 'defer' | 'refresh-blockhash' | 'remove') =>
             sendMessage<{ signature?: string } | boolean>({ type: `queue:${value}`, id: transactionId }),
@@ -1065,20 +1066,15 @@ function QueuedTransactionPage() {
         },
     });
 
-    if (queue.isError) return <ErrorView message={errorMessage(queue.error)} />;
-    if (!queue.isPending && !transaction) return <ErrorView message="Queued transaction not found" />;
+    if (request.isError) return <ErrorView message={errorMessage(request.error)} />;
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
-            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">
-                {transaction?.title ?? 'Loading transaction...'}
-            </h1>
-            {transaction && (
-                <>
-                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>{transaction.origin}</p>
-                    <TransactionLines lines={transaction.lines} />
-                </>
-            )}
+            <TransactionInformation
+                title={transaction?.title ?? 'Loading transaction...'}
+                origin={transaction?.origin}
+                balanceChanges={transaction?.balanceChanges}
+            />
             <p className={warningClassName}>Review this transaction before signing.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
             <div className={`mt-6 grid gap-2.5 ${transaction?.expiredBlockhash ? 'grid-cols-2' : 'grid-cols-3'}`}>
@@ -1502,15 +1498,11 @@ function ApprovalPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
-            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">
-                {request.data?.title ?? 'Loading request...'}
-            </h1>
-            {request.data && (
-                <>
-                    <p className={`${panelClassName} [overflow-wrap:anywhere]`}>{request.data.origin}</p>
-                    <TransactionLines lines={request.data.lines} />
-                </>
-            )}
+            <TransactionInformation
+                title={request.data?.title ?? 'Loading request...'}
+                origin={request.data?.origin}
+                balanceChanges={request.data?.balanceChanges}
+            />
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
             <div className={`mt-6 grid ${request.data?.transaction ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
@@ -1539,21 +1531,6 @@ function ApprovalPage() {
                 </button>
             </div>
         </WalletFrame>
-    );
-}
-
-function TransactionLines({ lines }: { lines: string[] }) {
-    return (
-        <ul className={`${panelClassName} max-h-[220px] list-none overflow-auto`}>
-            {lines.map((line, index) => (
-                <li
-                    className="[overflow-wrap:anywhere] [&+&]:mt-[9px] [&+&]:border-t [&+&]:border-[#29332c] [&+&]:pt-[9px]"
-                    key={`${index}:${line}`}
-                >
-                    {line}
-                </li>
-            ))}
-        </ul>
     );
 }
 

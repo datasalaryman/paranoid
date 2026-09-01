@@ -21,6 +21,7 @@ export interface ApprovalDetails {
     title: string;
     lines: string[];
     transaction?: boolean;
+    balanceChanges?: SolBalanceChange[];
 }
 
 export type ApprovalDecision = 'approve' | 'cancel' | 'defer';
@@ -33,6 +34,12 @@ export interface QueuedTransactionSummary {
     method: 'signTransaction' | 'signAndSendTransaction';
     createdAt: number;
     expiredBlockhash: boolean;
+    balanceChanges?: SolBalanceChange[];
+}
+
+export interface SolBalanceChange {
+    address: string;
+    lamports: number;
 }
 
 export interface WalletSummary {

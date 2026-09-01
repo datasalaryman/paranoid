@@ -5,6 +5,7 @@ import type {
     ApprovalDetails,
     ProviderRequest,
     QueuedTransactionSummary,
+    SolBalanceChange,
 } from '@/extension/messages';
 import type { SolanaChain } from '@/lib/solana';
 import {
@@ -235,6 +236,17 @@ export function setupBackground(): void {
             return true;
         }
 
+        if (message?.type === 'queue:get') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                return;
+            }
+            getActiveQueueSummary(message.id)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
         if (message?.type === 'queue:sign') {
             if (!isExtensionPage(sender)) {
                 sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
@@ -328,7 +340,16 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 await requireTrusted(origin);
                 const bytes = (request.params as { transaction: number[] }).transaction;
                 const transaction = deserialize(bytes);
-                await approveOrDeferTransaction(origin, transaction, bytes, 'signTransaction', undefined, keypair, rpc);
+                await approveOrDeferTransaction(
+                    origin,
+                    transaction,
+                    bytes,
+                    'signTransaction',
+                    undefined,
+                    keypair,
+                    rpc,
+                    connection
+                );
                 sign(transaction, keypair);
                 return Array.from(serialize(transaction));
             }
@@ -356,7 +377,8 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     'signAndSendTransaction',
                     options,
                     keypair,
-                    rpc
+                    rpc,
+                    connection
                 );
                 sign(transaction, keypair);
                 const simulation =
@@ -492,17 +514,20 @@ async function approveOrDeferTransaction(
     method: QueuedTransactionMethod,
     options: SendOptions | undefined,
     keypair: Keypair,
-    rpc: Awaited<ReturnType<typeof requireActiveRpc>>
+    rpc: Awaited<ReturnType<typeof requireActiveRpc>>,
+    connection: Connection
 ): Promise<void> {
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
     const lines = transactionLines(transaction, rpc.name);
-    const decision = await requestApproval({ origin, title, lines, transaction: true });
+    const balanceChanges = await transactionBalanceChanges(connection, transaction);
+    const decision = await requestApproval({ origin, title, lines, transaction: true, balanceChanges });
     if (decision === 'approve') return;
     if (decision === 'defer') {
         await enqueueTransaction(keypair.publicKey.toBase58(), rpc.id, {
             origin,
             title,
             lines,
+            balanceChanges,
             transaction: [...bytes],
             method,
             options,
@@ -528,6 +553,60 @@ function transactionLines(transaction: Transaction | VersionedTransaction, rpcNa
         transaction.instructions.forEach((instruction) => lines.push(`Program: ${instruction.programId.toBase58()}`));
     }
     return lines;
+}
+
+async function transactionBalanceChanges(
+    connection: Connection,
+    transaction: Transaction | VersionedTransaction
+): Promise<SolBalanceChange[]> {
+    const accountKeys = await transactionAccountKeys(connection, transaction);
+    const addresses = accountKeys.map((key) => key.toBase58());
+    const [before, simulation] = await Promise.all([
+        connection.getMultipleAccountsInfo(accountKeys, 'confirmed'),
+        'version' in transaction
+            ? connection.simulateTransaction(transaction, {
+                  commitment: 'confirmed',
+                  sigVerify: false,
+                  accounts: { encoding: 'base64', addresses },
+              })
+            : connection.simulateTransaction(transaction, undefined, accountKeys),
+    ]);
+    if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+    if (!simulation.value.accounts) throw new Error('Simulation did not return account balances');
+    return calculateSolBalanceChanges(
+        addresses,
+        before.map((account) => account?.lamports ?? null),
+        simulation.value.accounts.map((account) => account?.lamports ?? null)
+    );
+}
+
+async function transactionAccountKeys(
+    connection: Connection,
+    transaction: Transaction | VersionedTransaction
+): Promise<PublicKey[]> {
+    if (!('version' in transaction)) return transaction.compileMessage().accountKeys;
+    const lookupTables = await Promise.all(
+        transaction.message.addressTableLookups.map(async ({ accountKey }) => {
+            const { value } = await connection.getAddressLookupTable(accountKey, { commitment: 'confirmed' });
+            if (!value) throw new Error(`Address lookup table not found: ${accountKey.toBase58()}`);
+            return value;
+        })
+    );
+    return transaction.message.getAccountKeys({ addressLookupTableAccounts: lookupTables }).keySegments().flat();
+}
+
+export function calculateSolBalanceChanges(
+    addresses: string[],
+    beforeLamports: Array<number | null>,
+    afterLamports: Array<number | null>
+): SolBalanceChange[] {
+    if (addresses.length !== beforeLamports.length || addresses.length !== afterLamports.length) {
+        throw new Error('Simulation returned an unexpected number of accounts');
+    }
+    return addresses.map((address, index) => ({
+        address,
+        lamports: (afterLamports[index] ?? 0) - (beforeLamports[index] ?? 0),
+    }));
 }
 
 async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<ApprovalDecision> {
@@ -565,9 +644,27 @@ async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
     );
 }
 
+async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSummary> {
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    const queued = (await listQueuedTransactions(keypair.publicKey, rpc.id)).find(
+        (transaction) => transaction.id === id
+    );
+    if (!queued) throw new Error('Queued transaction not found');
+
+    const connection = new Connection(rpc.url, 'confirmed');
+    const transaction = deserialize(queued.transaction);
+    const expiredBlockhash = !(await connection.isBlockhashValid(recentBlockhash(transaction))).value;
+    if (expiredBlockhash) return toQueueSummary(queued, true);
+    return {
+        ...toQueueSummary(queued, false),
+        balanceChanges: await transactionBalanceChanges(connection, transaction),
+    };
+}
+
 function toQueueSummary(transaction: QueuedTransaction, expiredBlockhash: boolean): QueuedTransactionSummary {
-    const { id, origin, title, lines, method, createdAt } = transaction;
-    return { id, origin, title, lines, method, createdAt, expiredBlockhash };
+    const { id, origin, title, lines, method, createdAt, balanceChanges } = transaction;
+    return { id, origin, title, lines, method, createdAt, expiredBlockhash, balanceChanges };
 }
 
 async function moveActiveQueuedTransactionToTop(id: string): Promise<void> {

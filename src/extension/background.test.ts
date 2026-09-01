@@ -1,6 +1,25 @@
 import { describe, expect, test } from 'bun:test';
 import { Keypair, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { replaceRecentBlockhash } from './background';
+import { calculateSolBalanceChanges, replaceRecentBlockhash } from './background';
+
+describe('calculateSolBalanceChanges', () => {
+    test('calculates increases, decreases, unchanged balances, and account creation', () => {
+        expect(
+            calculateSolBalanceChanges(['payer', 'recipient', 'program', 'created'], [10, 2, 5, null], [4, 8, 5, 3])
+        ).toEqual([
+            { address: 'payer', lamports: -6 },
+            { address: 'recipient', lamports: 6 },
+            { address: 'program', lamports: 0 },
+            { address: 'created', lamports: 3 },
+        ]);
+    });
+
+    test('rejects a mismatched simulation response', () => {
+        expect(() => calculateSolBalanceChanges(['account'], [1], [])).toThrow(
+            'Simulation returned an unexpected number of accounts'
+        );
+    });
+});
 
 describe('replaceRecentBlockhash', () => {
     test('updates a legacy transaction and clears its signatures', () => {
