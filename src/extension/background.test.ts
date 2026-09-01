@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Keypair, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { calculateSolBalanceChanges, replaceRecentBlockhash } from './background';
+import { calculateSolBalanceChanges, replaceRecentBlockhash, transactionMessageBase64 } from './background';
 
 describe('calculateSolBalanceChanges', () => {
     test('calculates increases, decreases, unchanged balances, and account creation', () => {
@@ -52,5 +52,29 @@ describe('replaceRecentBlockhash', () => {
 
         expect(transaction.message.recentBlockhash).toBe(blockhash);
         expect(transaction.signatures.every((signature) => signature.every((byte) => byte === 0))).toBe(true);
+    });
+});
+
+describe('transactionMessageBase64', () => {
+    test('encodes a legacy transaction message', () => {
+        const transaction = new Transaction({
+            feePayer: Keypair.generate().publicKey,
+            recentBlockhash: Keypair.generate().publicKey.toBase58(),
+        });
+
+        expect(Buffer.from(transactionMessageBase64(transaction), 'base64')).toEqual(
+            Buffer.from(transaction.serializeMessage())
+        );
+    });
+
+    test('encodes a versioned transaction message', () => {
+        const message = new TransactionMessage({
+            payerKey: Keypair.generate().publicKey,
+            recentBlockhash: Keypair.generate().publicKey.toBase58(),
+            instructions: [],
+        }).compileToV0Message();
+        const transaction = new VersionedTransaction(message);
+
+        expect(Buffer.from(transactionMessageBase64(transaction), 'base64')).toEqual(Buffer.from(message.serialize()));
     });
 });

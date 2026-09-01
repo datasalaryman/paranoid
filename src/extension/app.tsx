@@ -1093,6 +1093,11 @@ function QueuedTransactionPage() {
                 title={transaction?.title ?? 'Loading transaction...'}
                 origin={transaction?.origin}
                 balanceChanges={transaction?.balanceChanges}
+                transactionMessage={transaction?.transactionMessage}
+                onMessageCopied={() => showToast('Transaction message copied to clipboard.', 'success')}
+                onMessageCopyError={(error) =>
+                    showToast(`Could not copy transaction message: ${errorMessage(error)}`, 'error')
+                }
             />
             <p className={warningClassName}>Review this transaction before signing.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
@@ -1521,6 +1526,11 @@ function ApprovalPage() {
                 title={request.data?.title ?? 'Loading request...'}
                 origin={request.data?.origin}
                 balanceChanges={request.data?.balanceChanges}
+                transactionMessage={request.data?.transactionMessage}
+                onMessageCopied={() => showToast('Transaction message copied to clipboard.', 'success')}
+                onMessageCopyError={(error) =>
+                    showToast(`Could not copy transaction message: ${errorMessage(error)}`, 'error')
+                }
             />
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}

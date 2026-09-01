@@ -540,7 +540,15 @@ async function approveOrDeferTransaction(
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
     const lines = transactionLines(transaction, rpc.name);
     const balanceChanges = await transactionBalanceChanges(connection, transaction);
-    const decision = await requestApproval({ origin, title, lines, transaction: true, balanceChanges });
+    const transactionMessage = transactionMessageBase64(transaction);
+    const decision = await requestApproval({
+        origin,
+        title,
+        lines,
+        transaction: true,
+        balanceChanges,
+        transactionMessage,
+    });
     if (decision === 'approve') return;
     if (decision === 'defer') {
         await enqueueTransaction(keypair.publicKey.toBase58(), rpc.id, {
@@ -653,13 +661,14 @@ async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
     const validityByBlockhash = new Map<string, Promise<boolean>>();
     return Promise.all(
         transactions.map(async (transaction) => {
-            const blockhash = recentBlockhash(deserialize(transaction.transaction));
+            const deserialized = deserialize(transaction.transaction);
+            const blockhash = recentBlockhash(deserialized);
             let validity = validityByBlockhash.get(blockhash);
             if (!validity) {
                 validity = connection.isBlockhashValid(blockhash).then(({ value }) => value);
                 validityByBlockhash.set(blockhash, validity);
             }
-            return toQueueSummary(transaction, !(await validity));
+            return toQueueSummary(transaction, !(await validity), deserialized);
         })
     );
 }
@@ -675,16 +684,30 @@ async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSumma
     const connection = new Connection(rpc.url, 'confirmed');
     const transaction = deserialize(queued.transaction);
     const expiredBlockhash = !(await connection.isBlockhashValid(recentBlockhash(transaction))).value;
-    if (expiredBlockhash) return toQueueSummary(queued, true);
+    if (expiredBlockhash) return toQueueSummary(queued, true, transaction);
     return {
-        ...toQueueSummary(queued, false),
+        ...toQueueSummary(queued, false, transaction),
         balanceChanges: await transactionBalanceChanges(connection, transaction),
     };
 }
 
-function toQueueSummary(transaction: QueuedTransaction, expiredBlockhash: boolean): QueuedTransactionSummary {
+function toQueueSummary(
+    transaction: QueuedTransaction,
+    expiredBlockhash: boolean,
+    deserialized: Transaction | VersionedTransaction
+): QueuedTransactionSummary {
     const { id, origin, title, lines, method, createdAt, balanceChanges } = transaction;
-    return { id, origin, title, lines, method, createdAt, expiredBlockhash, balanceChanges };
+    return {
+        id,
+        origin,
+        title,
+        lines,
+        method,
+        createdAt,
+        expiredBlockhash,
+        balanceChanges,
+        transactionMessage: transactionMessageBase64(deserialized),
+    };
 }
 
 async function moveActiveQueuedTransactionToTop(id: string): Promise<void> {
@@ -784,6 +807,13 @@ function serialize(transaction: Transaction | VersionedTransaction): Uint8Array 
     return 'version' in transaction
         ? transaction.serialize()
         : transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+}
+
+export function transactionMessageBase64(transaction: Transaction | VersionedTransaction): string {
+    const message = 'version' in transaction ? transaction.message.serialize() : transaction.serializeMessage();
+    let binary = '';
+    for (const byte of message) binary += String.fromCharCode(byte);
+    return btoa(binary);
 }
 
 function printable(value: string): boolean {
