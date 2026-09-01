@@ -1093,6 +1093,7 @@ function QueuedTransactionPage() {
                 title={transaction?.title ?? 'Loading transaction...'}
                 origin={transaction?.origin}
                 balanceChanges={transaction?.balanceChanges}
+                instructionTree={transaction?.instructionTree}
                 transactionMessage={transaction?.transactionMessage}
                 onMessageCopied={() => showToast('Transaction message copied to clipboard.', 'success')}
                 onMessageCopyError={(error) =>
@@ -1526,6 +1527,7 @@ function ApprovalPage() {
                 title={request.data?.title ?? 'Loading request...'}
                 origin={request.data?.origin}
                 balanceChanges={request.data?.balanceChanges}
+                instructionTree={request.data?.instructionTree}
                 transactionMessage={request.data?.transactionMessage}
                 onMessageCopied={() => showToast('Transaction message copied to clipboard.', 'success')}
                 onMessageCopyError={(error) =>

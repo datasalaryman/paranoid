@@ -1,9 +1,11 @@
-import type { SolBalanceChange } from '@/extension/messages';
+import { InstructionTree } from '@/extension/components/instruction-tree';
+import type { InstructionTreeNode, SolBalanceChange } from '@/extension/messages';
 
 export interface TransactionInformationProps {
     title: string;
     origin?: string;
     balanceChanges?: readonly SolBalanceChange[];
+    instructionTree?: readonly InstructionTreeNode[];
     transactionMessage?: string;
     onMessageCopied?: () => void;
     onMessageCopyError?: (error: unknown) => void;
@@ -13,6 +15,7 @@ export function TransactionInformation({
     title,
     origin,
     balanceChanges,
+    instructionTree,
     transactionMessage,
     onMessageCopied,
     onMessageCopyError,
@@ -60,6 +63,7 @@ export function TransactionInformation({
                     )}
                 </section>
             )}
+            {instructionTree && <InstructionTree instructions={instructionTree} />}
             {transactionMessage && (
                 <TransactionMessageCopy
                     message={transactionMessage}

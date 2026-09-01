@@ -1,8 +1,18 @@
-import { Connection, Keypair, PublicKey, Transaction, VersionedTransaction, type SendOptions } from '@solana/web3.js';
+import {
+    Connection,
+    Keypair,
+    PublicKey,
+    Transaction,
+    VersionedTransaction,
+    type ParsedInnerInstruction,
+    type SendOptions,
+} from '@solana/web3.js';
+import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import type {
     ApprovalDecision,
     ApprovalDetails,
+    InstructionTreeNode,
     ProviderRequest,
     QueuedTransactionSummary,
     SolBalanceChange,
@@ -539,7 +549,7 @@ async function approveOrDeferTransaction(
 ): Promise<void> {
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
     const lines = transactionLines(transaction, rpc.name);
-    const balanceChanges = await transactionBalanceChanges(connection, transaction);
+    const { balanceChanges, instructionTree } = await simulateTransactionDetails(connection, transaction);
     const transactionMessage = transactionMessageBase64(transaction);
     const decision = await requestApproval({
         origin,
@@ -547,6 +557,7 @@ async function approveOrDeferTransaction(
         lines,
         transaction: true,
         balanceChanges,
+        instructionTree,
         transactionMessage,
     });
     if (decision === 'approve') return;
@@ -556,6 +567,7 @@ async function approveOrDeferTransaction(
             title,
             lines,
             balanceChanges,
+            instructionTree,
             transaction: [...bytes],
             method,
             options,
@@ -583,29 +595,70 @@ function transactionLines(transaction: Transaction | VersionedTransaction, rpcNa
     return lines;
 }
 
-async function transactionBalanceChanges(
+async function simulateTransactionDetails(
     connection: Connection,
     transaction: Transaction | VersionedTransaction
-): Promise<SolBalanceChange[]> {
+): Promise<{ balanceChanges: SolBalanceChange[]; instructionTree: InstructionTreeNode[] }> {
     const accountKeys = await transactionAccountKeys(connection, transaction);
     const addresses = accountKeys.map((key) => key.toBase58());
+    const simulatedTransaction =
+        transaction instanceof VersionedTransaction
+            ? transaction
+            : new VersionedTransaction(transaction.compileMessage());
     const [before, simulation] = await Promise.all([
         connection.getMultipleAccountsInfo(accountKeys, 'confirmed'),
-        'version' in transaction
-            ? connection.simulateTransaction(transaction, {
-                  commitment: 'confirmed',
-                  sigVerify: false,
-                  accounts: { encoding: 'base64', addresses },
-              })
-            : connection.simulateTransaction(transaction, undefined, accountKeys),
+        connection.simulateTransaction(simulatedTransaction, {
+            commitment: 'confirmed',
+            sigVerify: false,
+            innerInstructions: true,
+            accounts: { encoding: 'base64', addresses },
+        }),
     ]);
     if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
     if (!simulation.value.accounts) throw new Error('Simulation did not return account balances');
-    return calculateSolBalanceChanges(
-        addresses,
-        before.map((account) => account?.lamports ?? null),
-        simulation.value.accounts.map((account) => account?.lamports ?? null)
-    );
+    return {
+        balanceChanges: calculateSolBalanceChanges(
+            addresses,
+            before.map((account) => account?.lamports ?? null),
+            simulation.value.accounts.map((account) => account?.lamports ?? null)
+        ),
+        instructionTree: buildInstructionTree(transaction, accountKeys, simulation.value.innerInstructions ?? []),
+    };
+}
+
+export function buildInstructionTree(
+    transaction: Transaction | VersionedTransaction,
+    accountKeys: PublicKey[],
+    innerInstructionGroups: ParsedInnerInstruction[]
+): InstructionTreeNode[] {
+    const innerByOuterIndex = new Map(innerInstructionGroups.map((group) => [group.index, group.instructions]));
+    const outerInstructions =
+        transaction instanceof VersionedTransaction
+            ? transaction.message.compiledInstructions.map((instruction) => ({
+                  programId: accountKeys[instruction.programIdIndex]?.toBase58() ?? 'Unknown',
+                  data: [...instruction.data],
+              }))
+            : transaction.instructions.map((instruction) => ({
+                  programId: instruction.programId.toBase58(),
+                  data: [...instruction.data],
+              }));
+
+    return outerInstructions.map((instruction, index) => ({
+        ...instruction,
+        innerInstructions: (innerByOuterIndex.get(index) ?? []).map((innerInstruction) => ({
+            programId: innerInstruction.programId.toBase58(),
+            data: 'data' in innerInstruction ? [...bs58.decode(innerInstruction.data)] : [],
+            instructionName:
+                'parsed' in innerInstruction && typeof innerInstruction.parsed?.type === 'string'
+                    ? formatInstructionName(innerInstruction.parsed.type)
+                    : undefined,
+            innerInstructions: [],
+        })),
+    }));
+}
+
+function formatInstructionName(value: string): string {
+    return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 async function transactionAccountKeys(
@@ -687,7 +740,7 @@ async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSumma
     if (expiredBlockhash) return toQueueSummary(queued, true, transaction);
     return {
         ...toQueueSummary(queued, false, transaction),
-        balanceChanges: await transactionBalanceChanges(connection, transaction),
+        ...(await simulateTransactionDetails(connection, transaction)),
     };
 }
 
@@ -696,7 +749,7 @@ function toQueueSummary(
     expiredBlockhash: boolean,
     deserialized: Transaction | VersionedTransaction
 ): QueuedTransactionSummary {
-    const { id, origin, title, lines, method, createdAt, balanceChanges } = transaction;
+    const { id, origin, title, lines, method, createdAt, balanceChanges, instructionTree } = transaction;
     return {
         id,
         origin,
@@ -706,6 +759,7 @@ function toQueueSummary(
         createdAt,
         expiredBlockhash,
         balanceChanges,
+        instructionTree,
         transactionMessage: transactionMessageBase64(deserialized),
     };
 }

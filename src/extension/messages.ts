@@ -22,6 +22,7 @@ export interface ApprovalDetails {
     lines: string[];
     transaction?: boolean;
     balanceChanges?: SolBalanceChange[];
+    instructionTree?: InstructionTreeNode[];
     transactionMessage?: string;
 }
 
@@ -36,7 +37,15 @@ export interface QueuedTransactionSummary {
     createdAt: number;
     expiredBlockhash: boolean;
     balanceChanges?: SolBalanceChange[];
+    instructionTree?: InstructionTreeNode[];
     transactionMessage: string;
+}
+
+export interface InstructionTreeNode {
+    programId: string;
+    data: number[];
+    instructionName?: string;
+    innerInstructions: InstructionTreeNode[];
 }
 
 export interface SolBalanceChange {

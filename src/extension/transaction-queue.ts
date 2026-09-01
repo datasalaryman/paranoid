@@ -1,5 +1,5 @@
 import type { SendOptions } from '@solana/web3.js';
-import type { SolBalanceChange } from '@/extension/messages';
+import type { InstructionTreeNode, SolBalanceChange } from '@/extension/messages';
 
 export type QueuedTransactionMethod = 'signTransaction' | 'signAndSendTransaction';
 
@@ -9,6 +9,7 @@ export interface QueuedTransaction {
     title: string;
     lines: string[];
     balanceChanges?: SolBalanceChange[];
+    instructionTree?: InstructionTreeNode[];
     transaction: number[];
     method: QueuedTransactionMethod;
     options?: SendOptions;

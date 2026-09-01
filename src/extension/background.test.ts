@@ -1,6 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { Keypair, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { calculateSolBalanceChanges, replaceRecentBlockhash, transactionMessageBase64 } from './background';
+import {
+    Keypair,
+    PublicKey,
+    SystemProgram,
+    Transaction,
+    TransactionMessage,
+    VersionedTransaction,
+} from '@solana/web3.js';
+import bs58 from 'bs58';
+import {
+    buildInstructionTree,
+    calculateSolBalanceChanges,
+    replaceRecentBlockhash,
+    transactionMessageBase64,
+} from './background';
 
 describe('calculateSolBalanceChanges', () => {
     test('calculates increases, decreases, unchanged balances, and account creation', () => {
@@ -76,5 +89,35 @@ describe('transactionMessageBase64', () => {
         const transaction = new VersionedTransaction(message);
 
         expect(Buffer.from(transactionMessageBase64(transaction), 'base64')).toEqual(Buffer.from(message.serialize()));
+    });
+});
+
+describe('buildInstructionTree', () => {
+    test('attaches simulated inner instructions to their outer instruction', () => {
+        const transaction = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: Keypair.generate().publicKey,
+                toPubkey: Keypair.generate().publicKey,
+                lamports: 1,
+            })
+        );
+        const tokenProgram = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+        const tree = buildInstructionTree(
+            transaction,
+            [],
+            [
+                {
+                    index: 0,
+                    instructions: [{ programId: tokenProgram, accounts: [], data: bs58.encode(Uint8Array.of(7)) }],
+                },
+            ]
+        );
+
+        expect(tree).toHaveLength(1);
+        expect(tree[0]?.programId).toBe(SystemProgram.programId.toBase58());
+        expect(tree[0]?.innerInstructions).toEqual([
+            { programId: tokenProgram.toBase58(), data: [7], instructionName: undefined, innerInstructions: [] },
+        ]);
     });
 });
