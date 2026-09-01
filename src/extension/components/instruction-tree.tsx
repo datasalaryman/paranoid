@@ -1,3 +1,4 @@
+import { useId, useState } from 'react';
 import type { InstructionTreeNode } from '@/extension/messages';
 
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
@@ -84,15 +85,39 @@ function InstructionNode({
     prefix: string;
     last: boolean;
 }) {
+    const [expanded, setExpanded] = useState(true);
+    const childrenId = useId();
+    const hasChildren = instruction.innerInstructions.length > 0;
     const childPrefix = `${prefix}${last ? '    ' : '│   '}`;
+    const row = (
+        <>
+            <span className="text-[#526157]">{`${prefix}${last ? '└── ' : '├── '}`}</span>
+            {hasChildren && (
+                <span className="mr-1 inline-block w-3 text-center text-[#829486]" aria-hidden="true">
+                    {expanded ? '▾' : '▸'}
+                </span>
+            )}
+            <InstructionLabel instruction={instruction} />
+        </>
+    );
+
     return (
         <li>
-            <div className="leading-6 whitespace-pre">
-                <span className="text-[#526157]">{`${prefix}${last ? '└── ' : '├── '}`}</span>
-                <InstructionLabel instruction={instruction} />
-            </div>
-            {instruction.innerInstructions.length > 0 && (
-                <ul>
+            {hasChildren ? (
+                <button
+                    type="button"
+                    className="cursor-pointer leading-6 whitespace-pre hover:text-[#e7f7e9] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#68f58a]"
+                    aria-expanded={expanded}
+                    aria-controls={childrenId}
+                    onClick={() => setExpanded((value) => !value)}
+                >
+                    {row}
+                </button>
+            ) : (
+                <div className="leading-6 whitespace-pre">{row}</div>
+            )}
+            {hasChildren && expanded && (
+                <ul id={childrenId}>
                     {instruction.innerInstructions.map((innerInstruction, index) => (
                         <InstructionNode
                             instruction={innerInstruction}
