@@ -20,11 +20,11 @@ import {
     listRpcs,
     removeKeypair,
     removeRpc,
+    refreshVaultSession,
     renameKeypair,
     selectKeypair,
     selectRpc,
     setupVault,
-    touchVault,
     unlockVault,
     updateRpc,
 } from '@/extension/keypairs';
@@ -107,6 +107,26 @@ export function setupBackground(): void {
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
+        }
+
+        if (message?.type === 'wallet:activity') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            refreshVaultSession()
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:keepalive') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            sendResponse(true);
+            return;
         }
 
         if (message?.type === 'wallet:setup-vault' || message?.type === 'wallet:unlock') {
@@ -430,7 +450,7 @@ async function resolveRpcChain(url: string): Promise<SolanaChain> {
 }
 
 async function getWalletStatus() {
-    touchVault();
+    await refreshVaultSession();
     const [stored, active, rpcs, activeRpc] = await Promise.all([
         listKeypairs(),
         getActiveKeypair(),

@@ -55,12 +55,15 @@ const TRANSACTION_QUEUE_STORE = 'transactionQueues';
 const ACTIVE_KEY = 'activeKeypair';
 const ACTIVE_RPC_KEY = 'activeRpc';
 const VAULT_KEY = 'vault';
+const VAULT_SESSION_KEY = 'vaultSessionKey';
+const VAULT_SESSION_LAST_USED_KEY = 'vaultSessionLastUsedAt';
 const PBKDF2_ITERATIONS = 600_000;
 const VAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const VAULT_VERIFIER = new TextEncoder().encode('paranoid-wallet-vault-v1');
 let unlockedVaultKey: CryptoKey | null = null;
 let vaultLockTimer: ReturnType<typeof setTimeout> | null = null;
 let vaultLastUsedAt = 0;
+let vaultSessionRestoration: Promise<void> | null = null;
 
 const BUILT_IN_RPCS: ActiveRpc[] = [
     {
@@ -120,12 +123,14 @@ const animals = [
 ];
 
 export async function getVaultStatus(): Promise<{ configured: boolean; unlocked: boolean }> {
+    await restoreVaultSession();
     lockVaultIfIdle();
     const settings = await getSetting<VaultSettings>(VAULT_KEY);
     return { configured: Boolean(settings), unlocked: Boolean(settings && unlockedVaultKey) };
 }
 
 export async function setupVault(password: string): Promise<void> {
+    await restoreVaultSession();
     if (typeof password !== 'string' || password.length < 8) throw new Error('Password must be at least 8 characters');
     if (await getSetting<VaultSettings>(VAULT_KEY)) throw new Error('A password has already been set');
 
@@ -167,12 +172,18 @@ export async function setupVault(password: string): Promise<void> {
     await transactionDone(transaction);
     database.close();
     unlockedVaultKey = key;
+    await persistVaultSessionKey(key);
     touchVault();
 }
 
 export async function unlockVault(password: string): Promise<void> {
+    await restoreVaultSession();
     if (typeof password !== 'string') throw new Error('Incorrect password');
     unlockedVaultKey = null;
+    vaultLastUsedAt = 0;
+    if (vaultLockTimer) clearTimeout(vaultLockTimer);
+    vaultLockTimer = null;
+    await chrome.storage.session.remove([VAULT_SESSION_KEY, VAULT_SESSION_LAST_USED_KEY]);
     const settings = await getSetting<VaultSettings>(VAULT_KEY);
     if (!settings) throw new Error('Create a password before unlocking the wallet');
     if (settings.version !== 1) throw new Error('This wallet uses an unsupported encryption version');
@@ -189,6 +200,7 @@ export async function unlockVault(password: string): Promise<void> {
         throw new Error('Incorrect password');
     }
     unlockedVaultKey = key;
+    await persistVaultSessionKey(key);
     touchVault();
 }
 
@@ -238,6 +250,7 @@ export async function getActiveKeypair(): Promise<StoredKeypair | null> {
 }
 
 export async function getActiveSigner(): Promise<Keypair | null> {
+    await restoreVaultSession();
     const stored = await getActiveKeypair();
     if (!stored) return null;
     const plaintext = await decrypt(requireUnlockedVault(), stored.encryptedSecretKey, keypairAdditionalData(stored));
@@ -447,6 +460,7 @@ export async function selectRpc(id: string): Promise<void> {
 }
 
 export async function getActiveRpc(): Promise<ActiveRpc | null> {
+    await restoreVaultSession();
     const id = await getSetting<string>(ACTIVE_RPC_KEY);
     if (!id) return null;
     const builtIn = BUILT_IN_RPCS.find((rpc) => rpc.id === id);
@@ -481,8 +495,14 @@ export function touchVault(): void {
     lockVaultIfIdle();
     if (!unlockedVaultKey) throw new Error('Wallet is locked. Open Paranoid to unlock it');
     vaultLastUsedAt = Date.now();
+    void chrome.storage.session.set({ [VAULT_SESSION_LAST_USED_KEY]: vaultLastUsedAt }).catch(() => undefined);
     if (vaultLockTimer) clearTimeout(vaultLockTimer);
     vaultLockTimer = setTimeout(lockVault, VAULT_IDLE_TIMEOUT_MS);
+}
+
+export async function refreshVaultSession(): Promise<void> {
+    await restoreVaultSession();
+    touchVault();
 }
 
 function lockVaultIfIdle(): void {
@@ -492,8 +512,51 @@ function lockVaultIfIdle(): void {
 function lockVault(): void {
     unlockedVaultKey = null;
     vaultLastUsedAt = 0;
+    void chrome.storage.session.remove([VAULT_SESSION_KEY, VAULT_SESSION_LAST_USED_KEY]).catch(() => undefined);
     if (vaultLockTimer) clearTimeout(vaultLockTimer);
     vaultLockTimer = null;
+}
+
+function restoreVaultSession(): Promise<void> {
+    if (vaultSessionRestoration) return vaultSessionRestoration;
+    vaultSessionRestoration = (async () => {
+        const stored = await chrome.storage.session.get([VAULT_SESSION_KEY, VAULT_SESSION_LAST_USED_KEY]);
+        const key = stored[VAULT_SESSION_KEY] as unknown;
+        const lastUsedAt = stored[VAULT_SESSION_LAST_USED_KEY] as unknown;
+        if (
+            !Array.isArray(key) ||
+            key.length !== 32 ||
+            !key.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255) ||
+            typeof lastUsedAt !== 'number' ||
+            lastUsedAt > Date.now() ||
+            Date.now() - lastUsedAt >= VAULT_IDLE_TIMEOUT_MS
+        ) {
+            await chrome.storage.session.remove([VAULT_SESSION_KEY, VAULT_SESSION_LAST_USED_KEY]);
+            return;
+        }
+
+        const rawKey = new Uint8Array(key);
+        try {
+            unlockedVaultKey = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt', 'decrypt']);
+            vaultLastUsedAt = lastUsedAt;
+            vaultLockTimer = setTimeout(lockVault, VAULT_IDLE_TIMEOUT_MS - (Date.now() - vaultLastUsedAt));
+        } finally {
+            rawKey.fill(0);
+        }
+    })();
+    return vaultSessionRestoration;
+}
+
+async function persistVaultSessionKey(key: CryptoKey): Promise<void> {
+    const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+    try {
+        await chrome.storage.session.set({
+            [VAULT_SESSION_KEY]: Array.from(rawKey),
+            [VAULT_SESSION_LAST_USED_KEY]: Date.now(),
+        });
+    } finally {
+        rawKey.fill(0);
+    }
 }
 
 async function deriveVaultKey(password: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
@@ -504,7 +567,7 @@ async function deriveVaultKey(password: string, salt: Uint8Array, iterations: nu
             { name: 'PBKDF2', hash: 'SHA-256', salt: asArrayBuffer(salt), iterations },
             material,
             { name: 'AES-GCM', length: 256 },
-            false,
+            true,
             ['encrypt', 'decrypt']
         );
     } finally {

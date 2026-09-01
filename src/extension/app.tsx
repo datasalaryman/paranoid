@@ -35,6 +35,7 @@ const secondaryButtonClassName = `${buttonClassName} border border-[#36433a] bg-
 const inputClassName =
     'w-full rounded-[6px] border border-[#36433a] bg-[#101411] p-3 text-sm text-[#e7f7e9] outline-none focus:border-[#68f58a]';
 const customRpcOrigins = ['http://*/*', 'https://*/*'];
+const backgroundKeepaliveIntervalMs = 20_000;
 
 const rootRoute = createRootRoute({
     component: WalletRoot,
@@ -45,6 +46,24 @@ type Toast = { message: string; tone: 'success' | 'error' };
 
 function WalletRoot() {
     const [toast, setToast] = useState<Toast | null>(null);
+
+    useEffect(() => {
+        const reportActivity = () => {
+            void chrome.runtime.sendMessage({ type: 'wallet:activity' }).catch(() => undefined);
+        };
+        const keepBackgroundAlive = () => {
+            void chrome.runtime.sendMessage({ type: 'wallet:keepalive' }).catch(() => undefined);
+        };
+        const keepalive = setInterval(keepBackgroundAlive, backgroundKeepaliveIntervalMs);
+
+        window.addEventListener('pointerdown', reportActivity);
+        window.addEventListener('keydown', reportActivity);
+        return () => {
+            window.removeEventListener('pointerdown', reportActivity);
+            window.removeEventListener('keydown', reportActivity);
+            clearInterval(keepalive);
+        };
+    }, []);
 
     useEffect(() => {
         let timeout: ReturnType<typeof setTimeout> | undefined;
