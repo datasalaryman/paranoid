@@ -120,4 +120,29 @@ describe('buildInstructionTree', () => {
             { programId: tokenProgram.toBase58(), data: [7], instructionName: undefined, innerInstructions: [] },
         ]);
     });
+
+    test('resolves compiled inner instruction program indexes', () => {
+        const transaction = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: Keypair.generate().publicKey,
+                toPubkey: Keypair.generate().publicKey,
+                lamports: 1,
+            })
+        );
+        const tokenProgram = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+        const tree = buildInstructionTree(
+            transaction,
+            [tokenProgram],
+            [
+                {
+                    index: 0,
+                    instructions: [{ programIdIndex: 0, accounts: [], data: bs58.encode(Uint8Array.of(7)) }],
+                },
+            ]
+        );
+
+        expect(tree[0]?.innerInstructions[0]?.programId).toBe(tokenProgram.toBase58());
+        expect(tree[0]?.innerInstructions[0]?.data).toEqual([7]);
+    });
 });

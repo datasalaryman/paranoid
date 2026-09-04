@@ -10,6 +10,7 @@ import { Keypair } from '@solana/web3.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import {
+    Link,
     Outlet,
     RouterProvider,
     createMemoryHistory,
@@ -27,6 +28,7 @@ import type {
     ApprovalDetails,
     QueuedTransactionSummary,
     RpcSummary,
+    TransactionHistoryDetails,
     TransactionHistoryPage,
     WalletStatus,
     WalletSummary,
@@ -201,6 +203,12 @@ const transactionHistoryRoute = createRoute({
     component: TransactionHistoryPageView,
 });
 
+const transactionHistoryDetailsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/transaction-history/$signature',
+    component: TransactionHistoryDetailsPage,
+});
+
 const routeTree = rootRoute.addChildren([
     popupRoute,
     walletRoute,
@@ -217,6 +225,7 @@ const routeTree = rootRoute.addChildren([
     transactionQueueRoute,
     queuedTransactionRoute,
     transactionHistoryRoute,
+    transactionHistoryDetailsRoute,
 ]);
 
 export function ExtensionApp({ initialPath }: { initialPath: string }) {
@@ -1020,7 +1029,6 @@ function TransactionHistoryPageView() {
     }, [history.fetchNextPage, history.hasNextPage, history.isFetchingNextPage]);
 
     const transactions = history.data?.pages.flatMap((page) => page.transactions) ?? [];
-    const customRpcUrl = rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
 
     return (
         <WalletFrame
@@ -1045,12 +1053,16 @@ function TransactionHistoryPageView() {
             )}
             <div className="grid gap-2.5">
                 {transactions.map((transaction) => (
-                    <a
+                    <button
                         key={transaction.signature}
-                        className="block min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-[#e7f7e9] no-underline hover:border-[#68f58a]"
-                        href={getSolanaExplorerTransactionUrl(transaction.signature, rpc!.chain, customRpcUrl)}
-                        target="_blank"
-                        rel="noreferrer"
+                        className="block min-w-0 cursor-pointer rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9] hover:border-[#68f58a]"
+                        type="button"
+                        onClick={() =>
+                            navigate({
+                                to: '/transaction-history/$signature',
+                                params: { signature: transaction.signature },
+                            })
+                        }
                     >
                         <span className="block truncate font-mono text-sm font-semibold">
                             {truncateSignature(transaction.signature)}
@@ -1069,11 +1081,55 @@ function TransactionHistoryPageView() {
                                 : 'Time unavailable'}
                             {transaction.memo ? ` / ${transaction.memo}` : ''}
                         </span>
-                    </a>
+                    </button>
                 ))}
             </div>
             <div ref={loadMoreRef} className="h-8" aria-hidden="true" />
             {history.isFetchingNextPage && <p className="text-center text-xs text-[#b7c8ba]">Loading more...</p>}
+        </WalletFrame>
+    );
+}
+
+function TransactionHistoryDetailsPage() {
+    const { signature } = transactionHistoryDetailsRoute.useParams();
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
+    });
+    const details = useQuery({
+        queryKey: ['transaction-history', signature],
+        queryFn: () => sendMessage<TransactionHistoryDetails>({ type: 'history:get', signature }),
+    });
+    const rpc = status.data?.activeRpc;
+    const customRpcUrl = rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
+    const explorerUrl = rpc ? getSolanaExplorerTransactionUrl(signature, rpc.chain, customRpcUrl) : undefined;
+
+    return (
+        <WalletFrame eyebrow="PARANOID / TRANSACTION">
+            <Link
+                className="mb-4 inline-block text-xs text-[#b7c8ba] no-underline hover:text-[#e7f7e9]"
+                to="/transaction-history"
+            >
+                &lt; Transaction History
+            </Link>
+            <TransactionInformation
+                title={details.isPending ? 'Loading transaction...' : truncateSignature(signature)}
+                balanceChanges={details.data?.balanceChanges}
+                instructionTree={details.data?.instructionTree}
+            />
+            {(status.isError || details.isError) && (
+                <p className={errorClassName}>{errorMessage(status.error ?? details.error)}</p>
+            )}
+            {explorerUrl && (
+                <a
+                    className={`${buttonClassName} mt-6 block text-center no-underline`}
+                    href={explorerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    View in Explorer
+                </a>
+            )}
         </WalletFrame>
     );
 }

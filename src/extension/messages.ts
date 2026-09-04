@@ -46,6 +46,11 @@ export interface TransactionHistoryPage {
     nextBefore?: string;
 }
 
+export interface TransactionHistoryDetails {
+    balanceChanges: SolBalanceChange[];
+    instructionTree: InstructionTreeNode[];
+}
+
 export interface InstructionTreeNode {
     programId: string;
     data: number[];

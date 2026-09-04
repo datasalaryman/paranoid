@@ -16,6 +16,7 @@ import type {
     ProviderRequest,
     QueuedTransactionSummary,
     SolBalanceChange,
+    TransactionHistoryDetails,
     TransactionHistoryPage,
 } from '@/extension/messages';
 import type { SolanaChain } from '@/lib/solana';
@@ -279,6 +280,17 @@ export function setupBackground(): void {
                 return;
             }
             getActiveTransactionHistory(typeof message.before === 'string' ? message.before : undefined)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'history:get') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Transaction history is only available from Paranoid' });
+                return;
+            }
+            getActiveTransactionHistoryDetails(message.signature)
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -647,7 +659,7 @@ async function simulateTransactionDetails(
 export function buildInstructionTree(
     transaction: Transaction | VersionedTransaction,
     accountKeys: PublicKey[],
-    innerInstructionGroups: ParsedInnerInstruction[]
+    innerInstructionGroups: TransactionInnerInstructionGroup[]
 ): InstructionTreeNode[] {
     const innerByOuterIndex = new Map(innerInstructionGroups.map((group) => [group.index, group.instructions]));
     const outerInstructions =
@@ -664,7 +676,10 @@ export function buildInstructionTree(
     return outerInstructions.map((instruction, index) => ({
         ...instruction,
         innerInstructions: (innerByOuterIndex.get(index) ?? []).map((innerInstruction) => ({
-            programId: innerInstruction.programId.toBase58(),
+            programId:
+                'programId' in innerInstruction
+                    ? innerInstruction.programId.toBase58()
+                    : (accountKeys[innerInstruction.programIdIndex]?.toBase58() ?? 'Unknown'),
             data: 'data' in innerInstruction ? [...bs58.decode(innerInstruction.data)] : [],
             instructionName:
                 'parsed' in innerInstruction && typeof innerInstruction.parsed?.type === 'string'
@@ -674,6 +689,14 @@ export function buildInstructionTree(
         })),
     }));
 }
+
+type TransactionInnerInstruction =
+    ParsedInnerInstruction['instructions'][number] | { programIdIndex: number; data: string };
+
+type TransactionInnerInstructionGroup = {
+    index: number;
+    instructions: TransactionInnerInstruction[];
+};
 
 function formatInstructionName(value: string): string {
     return value.charAt(0).toUpperCase() + value.slice(1);
@@ -793,6 +816,35 @@ async function getActiveTransactionHistory(before?: string): Promise<Transaction
     return {
         transactions,
         nextBefore: fetched.length === pageSize ? transactions.at(-1)?.signature : undefined,
+    };
+}
+
+async function getActiveTransactionHistoryDetails(signature: string): Promise<TransactionHistoryDetails> {
+    if (typeof signature !== 'string' || !signature) throw new Error('Transaction signature is required');
+    const rpc = await getActiveRpc();
+    if (!rpc) throw new Error('Select an RPC first');
+
+    const response = await new Connection(rpc.url, 'confirmed').getTransaction(signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+    });
+    if (!response) throw new Error('Transaction not found');
+    if (!response.meta) throw new Error('Transaction details are unavailable');
+
+    const message = response.transaction.message;
+    const accountKeys = message
+        .getAccountKeys({ accountKeysFromLookups: response.meta.loadedAddresses })
+        .keySegments()
+        .flat();
+    const addresses = accountKeys.map((key) => key.toBase58());
+
+    return {
+        balanceChanges: calculateSolBalanceChanges(addresses, response.meta.preBalances, response.meta.postBalances),
+        instructionTree: buildInstructionTree(
+            new VersionedTransaction(message),
+            accountKeys,
+            response.meta.innerInstructions ?? []
+        ),
     };
 }
 
