@@ -23,7 +23,7 @@ interface StoredTransactionQueue {
 }
 
 const DATABASE_NAME = 'paranoid-wallet';
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const TRANSACTION_QUEUE_STORE = 'transactionQueues';
 
 export async function listQueuedTransactions(publicKey: string, rpcId: string): Promise<QueuedTransaction[]> {
@@ -140,6 +140,9 @@ function openDatabase(): Promise<IDBDatabase> {
             }
             if (!open.result.objectStoreNames.contains(TRANSACTION_QUEUE_STORE)) {
                 open.result.createObjectStore(TRANSACTION_QUEUE_STORE, { keyPath: 'scope' });
+            }
+            if (!open.result.objectStoreNames.contains('transactionHistories')) {
+                open.result.createObjectStore('transactionHistories', { keyPath: 'scope' });
             }
         };
         open.onsuccess = () => resolve(open.result);

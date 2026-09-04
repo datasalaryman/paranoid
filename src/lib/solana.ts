@@ -46,6 +46,19 @@ export function getSolanaExplorerAccountTokensUrl(address: string, chain: Solana
     return explorerUrl.toString();
 }
 
+export function getSolanaExplorerTransactionUrl(signature: string, chain: SolanaChain, customRpcUrl?: string): string {
+    const explorerUrl = new URL(`/tx/${encodeURIComponent(signature)}`, 'https://explorer.solana.com');
+
+    if (customRpcUrl) {
+        explorerUrl.searchParams.set('cluster', 'custom');
+        explorerUrl.searchParams.set('customUrl', customRpcUrl);
+    } else if (chain !== SOLANA_MAINNET_CHAIN) {
+        explorerUrl.searchParams.set('cluster', chain.replace('solana:', ''));
+    }
+
+    return explorerUrl.toString();
+}
+
 export function isVersionedTransaction(
     transaction: Transaction | VersionedTransaction
 ): transaction is VersionedTransaction {

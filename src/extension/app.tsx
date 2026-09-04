@@ -1,4 +1,11 @@
-import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+    QueryClient,
+    QueryClientProvider,
+    useInfiniteQuery,
+    useMutation,
+    useQuery,
+    useQueryClient,
+} from '@tanstack/react-query';
 import { Keypair } from '@solana/web3.js';
 import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
@@ -11,7 +18,7 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { TransactionInformation } from '@/extension/components/transaction-information';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
 import type {
@@ -20,10 +27,11 @@ import type {
     ApprovalDetails,
     QueuedTransactionSummary,
     RpcSummary,
+    TransactionHistoryPage,
     WalletStatus,
     WalletSummary,
 } from '@/extension/messages';
-import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
+import { getSolanaExplorerAccountTokensUrl, getSolanaExplorerTransactionUrl } from '@/lib/solana';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
 const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
@@ -187,6 +195,12 @@ const queuedTransactionRoute = createRoute({
     component: QueuedTransactionPage,
 });
 
+const transactionHistoryRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/transaction-history',
+    component: TransactionHistoryPageView,
+});
+
 const routeTree = rootRoute.addChildren([
     popupRoute,
     walletRoute,
@@ -202,6 +216,7 @@ const routeTree = rootRoute.addChildren([
     approvalRoute,
     transactionQueueRoute,
     queuedTransactionRoute,
+    transactionHistoryRoute,
 ]);
 
 export function ExtensionApp({ initialPath }: { initialPath: string }) {
@@ -902,7 +917,6 @@ function RpcSettingsPage() {
 }
 
 function PopupPage() {
-    const navigate = useNavigate();
     const status = useQuery({
         queryKey: ['wallet-status'],
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
@@ -933,6 +947,7 @@ function PopupPage() {
                     activeRpc={activeRpc ?? null}
                 />
             }
+            bottomNav={<TransactionNavigation queueCount={queue.data?.length ?? 0} />}
         >
             <div className="mt-3 mb-6">
                 <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
@@ -972,15 +987,93 @@ function PopupPage() {
                 </div>
             )}
             <p className={warningClassName}>Keypairs and custom RPC URLs are encrypted at rest.</p>
+        </WalletFrame>
+    );
+}
+
+function TransactionHistoryPageView() {
+    const navigate = useNavigate();
+    const loadMoreRef = useRef<HTMLDivElement>(null);
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
+    });
+    const active = status.data?.active;
+    const rpc = status.data?.activeRpc;
+    const queue = useTransactionQueue(active?.publicKey, rpc?.id);
+    const history = useInfiniteQuery({
+        queryKey: ['transaction-history', active?.publicKey, rpc?.id],
+        enabled: Boolean(active && rpc),
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ pageParam }) => sendMessage<TransactionHistoryPage>({ type: 'history:list', before: pageParam }),
+        getNextPageParam: (page) => page.nextBefore,
+    });
+
+    useEffect(() => {
+        const target = loadMoreRef.current;
+        if (!target || !history.hasNextPage) return;
+        const observer = new IntersectionObserver(([entry]) => {
+            if (entry?.isIntersecting && !history.isFetchingNextPage) void history.fetchNextPage();
+        });
+        observer.observe(target);
+        return () => observer.disconnect();
+    }, [history.fetchNextPage, history.hasNextPage, history.isFetchingNextPage]);
+
+    const transactions = history.data?.pages.flatMap((page) => page.transactions) ?? [];
+    const customRpcUrl = rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
+
+    return (
+        <WalletFrame
+            eyebrow="PARANOID / TRANSACTION HISTORY"
+            bottomNav={<TransactionNavigation active="history" queueCount={queue.data?.length ?? 0} />}
+        >
             <button
-                className="mt-8 flex w-full cursor-pointer items-center justify-between rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left font-semibold text-[#e7f7e9]"
-                onClick={() => navigate({ to: '/transaction-queue' })}
+                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
+                onClick={() => navigate({ to: '/wallet' })}
             >
-                <span>Transaction Queue</span>
-                <span className="min-w-6 rounded-full bg-[#68f58a] px-1.5 py-0.5 text-center text-xs font-bold text-[#081009]">
-                    {queue.data?.length ?? 0}
-                </span>
+                &lt; Account
             </button>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Transaction History</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
+                Recent transactions that included {truncateAddress(active?.publicKey)}.
+            </p>
+            {(status.isError || history.isError) && (
+                <p className={errorClassName}>{errorMessage(status.error ?? history.error)}</p>
+            )}
+            {!status.isPending && !history.isPending && transactions.length === 0 && !history.isError && (
+                <p className={panelClassName}>There are no transactions for this address.</p>
+            )}
+            <div className="grid gap-2.5">
+                {transactions.map((transaction) => (
+                    <a
+                        key={transaction.signature}
+                        className="block min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-[#e7f7e9] no-underline hover:border-[#68f58a]"
+                        href={getSolanaExplorerTransactionUrl(transaction.signature, rpc!.chain, customRpcUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        <span className="block truncate font-mono text-sm font-semibold">
+                            {truncateSignature(transaction.signature)}
+                        </span>
+                        <span
+                            className={`mt-2 block text-[11px] tracking-[0.08em] uppercase ${
+                                transaction.failed ? 'text-[#ff8f8f]' : 'text-[#68f58a]'
+                            }`}
+                        >
+                            {transaction.failed ? 'Failed' : (transaction.confirmationStatus ?? 'Processed')} / Slot{' '}
+                            {transaction.slot.toLocaleString()}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-[#b7c8ba]">
+                            {transaction.blockTime
+                                ? new Date(transaction.blockTime * 1000).toLocaleString()
+                                : 'Time unavailable'}
+                            {transaction.memo ? ` / ${transaction.memo}` : ''}
+                        </span>
+                    </a>
+                ))}
+            </div>
+            <div ref={loadMoreRef} className="h-8" aria-hidden="true" />
+            {history.isFetchingNextPage && <p className="text-center text-xs text-[#b7c8ba]">Loading more...</p>}
         </WalletFrame>
     );
 }
@@ -996,7 +1089,10 @@ function TransactionQueuePage() {
     const expiredTransactions = queue.data?.filter((transaction) => transaction.expiredBlockhash) ?? [];
 
     return (
-        <WalletFrame eyebrow="PARANOID / TRANSACTION QUEUE">
+        <WalletFrame
+            eyebrow="PARANOID / TRANSACTION QUEUE"
+            bottomNav={<TransactionNavigation active="queue" queueCount={queue.data?.length ?? 0} />}
+        >
             <button
                 className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
                 onClick={() => navigate({ to: '/wallet' })}
@@ -1154,6 +1250,52 @@ function useTransactionQueue(publicKey?: string, rpcId?: string) {
         enabled: Boolean(publicKey && rpcId),
         queryFn: () => sendMessage<QueuedTransactionSummary[]>({ type: 'queue:list' }),
     });
+}
+
+function TransactionNavigation({ active, queueCount }: { active?: 'queue' | 'history'; queueCount: number }) {
+    const navigate = useNavigate();
+    return (
+        <nav className="sticky bottom-0 grid grid-cols-2 divide-x divide-[#36433a] border-t border-[#36433a] bg-[#151a17]">
+            <TransactionNavButton
+                label="Transaction Queue"
+                value={`${queueCount} queued`}
+                active={active === 'queue'}
+                onClick={() => navigate({ to: '/transaction-queue' })}
+            />
+            <TransactionNavButton
+                label="Transaction History"
+                value="Recent activity"
+                active={active === 'history'}
+                onClick={() => navigate({ to: '/transaction-history' })}
+            />
+        </nav>
+    );
+}
+
+function TransactionNavButton({
+    label,
+    value,
+    active,
+    onClick,
+}: {
+    label: string;
+    value: string;
+    active: boolean;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            className={`min-w-0 cursor-pointer border-0 px-3 py-3.5 text-center hover:bg-[#202722] ${
+                active ? 'bg-[#142419] text-[#b9ffca]' : 'bg-transparent text-[#e7f7e9]'
+            }`}
+            type="button"
+            aria-current={active ? 'page' : undefined}
+            onClick={onClick}
+        >
+            <span className="block text-[10px] tracking-[0.1em] text-[#68f58a] uppercase">{label}</span>
+            <span className="mt-1 block truncate text-xs font-semibold">{value}</span>
+        </button>
+    );
 }
 
 function AccountNavigation({
@@ -1570,20 +1712,23 @@ function WalletFrame({
     children,
     welcome = false,
     topNav,
+    bottomNav,
 }: {
     eyebrow: string;
     children: ReactNode;
     welcome?: boolean;
     topNav?: ReactNode;
+    bottomNav?: ReactNode;
 }) {
-    if (topNav) {
+    if (topNav || bottomNav) {
         return (
-            <main>
+            <main className="flex min-h-screen flex-col">
                 {topNav}
-                <div className="p-7">
+                <div className="flex-1 p-7">
                     <p className={labelClassName}>{eyebrow}</p>
                     {children}
                 </div>
+                {bottomNav}
             </main>
         );
     }
@@ -1650,6 +1795,10 @@ async function requestCustomRpcAccess(): Promise<void> {
 
 function truncateAddress(address: string | undefined): string {
     return address ? `${address.slice(0, 4)}...${address.slice(-4)}` : 'Loading...';
+}
+
+function truncateSignature(signature: string): string {
+    return signature.length > 24 ? `${signature.slice(0, 12)}...${signature.slice(-12)}` : signature;
 }
 
 function formatBalance(lamports: number | null | undefined): string {

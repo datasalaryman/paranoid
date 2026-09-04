@@ -41,6 +41,11 @@ export interface QueuedTransactionSummary {
     transactionMessage: string;
 }
 
+export interface TransactionHistoryPage {
+    transactions: TransactionHistoryItem[];
+    nextBefore?: string;
+}
+
 export interface InstructionTreeNode {
     programId: string;
     data: number[];
@@ -83,3 +88,4 @@ export interface VaultStatus {
     unlocked: boolean;
 }
 import type { SolanaChain } from '@/lib/solana';
+import type { TransactionHistoryItem } from '@/extension/transaction-history';

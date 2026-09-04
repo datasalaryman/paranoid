@@ -16,6 +16,7 @@ import type {
     ProviderRequest,
     QueuedTransactionSummary,
     SolBalanceChange,
+    TransactionHistoryPage,
 } from '@/extension/messages';
 import type { SolanaChain } from '@/lib/solana';
 import {
@@ -49,6 +50,12 @@ import {
     type QueuedTransaction,
     type QueuedTransactionMethod,
 } from '@/extension/transaction-queue';
+import {
+    hasStoredTransaction,
+    listTransactionHistory,
+    storeTransactionHistory,
+    toTransactionHistoryItem,
+} from '@/extension/transaction-history';
 
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (decision: ApprovalDecision) => void }>();
 const approvalWindows = new Map<number, string>();
@@ -261,6 +268,17 @@ export function setupBackground(): void {
                 return;
             }
             getActiveQueueSummaries()
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'history:list') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Transaction history is only available from Paranoid' });
+                return;
+            }
+            getActiveTransactionHistory(typeof message.before === 'string' ? message.before : undefined)
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -724,6 +742,58 @@ async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
             return toQueueSummary(transaction, !(await validity), deserialized);
         })
     );
+}
+
+async function getActiveTransactionHistory(before?: string): Promise<TransactionHistoryPage> {
+    const pageSize = 10;
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc) return { transactions: [] };
+
+    const cached = await listTransactionHistory(keypair.publicKey, rpc.id, before, pageSize);
+    const connection = new Connection(rpc.url, 'confirmed');
+    let fetched;
+    try {
+        fetched = await connection.getSignaturesForAddress(new PublicKey(keypair.publicKey), {
+            before,
+            limit: pageSize,
+        });
+    } catch (error) {
+        if (!cached.length) throw error;
+        return {
+            transactions: cached,
+            nextBefore: cached.length === pageSize ? cached.at(-1)?.signature : undefined,
+        };
+    }
+
+    const overlapsCache = await hasStoredTransaction(
+        keypair.publicKey,
+        rpc.id,
+        fetched.map(({ signature }) => signature)
+    );
+    await storeTransactionHistory(keypair.publicKey, rpc.id, fetched.map(toTransactionHistoryItem), before);
+
+    // A fully new page preloads the next ten signatures. The following scroll can then render the overlap from storage.
+    if (!overlapsCache && fetched.length === pageSize) {
+        const remainderBefore = fetched.at(-1)!.signature;
+        const remainder = await connection
+            .getSignaturesForAddress(new PublicKey(keypair.publicKey), {
+                before: remainderBefore,
+                limit: pageSize,
+            })
+            .catch(() => []);
+        await storeTransactionHistory(
+            keypair.publicKey,
+            rpc.id,
+            remainder.map(toTransactionHistoryItem),
+            remainderBefore
+        );
+    }
+
+    const transactions = await listTransactionHistory(keypair.publicKey, rpc.id, before, pageSize);
+    return {
+        transactions,
+        nextBefore: fetched.length === pageSize ? transactions.at(-1)?.signature : undefined,
+    };
 }
 
 async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSummary> {
