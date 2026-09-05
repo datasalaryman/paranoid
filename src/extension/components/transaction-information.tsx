@@ -3,6 +3,7 @@ import type { InstructionTreeNode, SolBalanceChange } from '@/extension/messages
 
 export interface TransactionInformationProps {
     title: string;
+    isLoading?: boolean;
     origin?: string;
     balanceChanges?: readonly SolBalanceChange[];
     instructionTree?: readonly InstructionTreeNode[];
@@ -13,6 +14,7 @@ export interface TransactionInformationProps {
 
 export function TransactionInformation({
     title,
+    isLoading = false,
     origin,
     balanceChanges,
     instructionTree,
@@ -30,12 +32,20 @@ export function TransactionInformation({
                     {origin}
                 </p>
             )}
-            {changedBalances && (
-                <section className="my-[1em]">
+            {(isLoading || changedBalances) && (
+                <section className="my-[1em]" aria-busy={isLoading}>
                     <h2 className="my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase">
                         Account SOL changes
                     </h2>
-                    {changedBalances.length > 0 ? (
+                    {isLoading ? (
+                        <p className="flex items-center gap-2 rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px] text-[#b7c8ba]">
+                            <span
+                                className="size-4 shrink-0 animate-spin rounded-full border-2 border-[#36433a] border-t-[#68f58a]"
+                                aria-hidden="true"
+                            />
+                            Loading balance changes...
+                        </p>
+                    ) : changedBalances && changedBalances.length > 0 ? (
                         <div className="max-h-[220px] overflow-auto rounded-[6px] border border-[#29332c] bg-[#151a17]">
                             <table className="w-full border-collapse" aria-label="Account SOL balance changes">
                                 <tbody>
@@ -63,7 +73,9 @@ export function TransactionInformation({
                     )}
                 </section>
             )}
-            {instructionTree && <InstructionTree instructions={instructionTree} />}
+            {(isLoading || instructionTree) && (
+                <InstructionTree instructions={instructionTree ?? []} isLoading={isLoading} />
+            )}
             {transactionMessage && (
                 <TransactionMessageCopy
                     message={transactionMessage}

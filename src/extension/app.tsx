@@ -1114,6 +1114,7 @@ function TransactionHistoryDetailsPage() {
             </Link>
             <TransactionInformation
                 title={details.isPending ? 'Loading transaction...' : truncateSignature(signature)}
+                isLoading={details.isPending}
                 balanceChanges={details.data?.balanceChanges}
                 instructionTree={details.data?.instructionTree}
             />

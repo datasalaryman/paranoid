@@ -49,12 +49,26 @@ const TOKEN_INSTRUCTIONS = [
     'UiAmountToAmount',
 ] as const;
 
-export function InstructionTree({ instructions }: { instructions: readonly InstructionTreeNode[] }) {
+export function InstructionTree({
+    instructions,
+    isLoading = false,
+}: {
+    instructions: readonly InstructionTreeNode[];
+    isLoading?: boolean;
+}) {
     return (
-        <section className="my-[1em]">
+        <section className="my-[1em]" aria-busy={isLoading}>
             <h2 className="my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase">Instructions</h2>
             <div className="overflow-auto rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]">
-                {instructions.length > 0 ? (
+                {isLoading ? (
+                    <p className="flex items-center gap-2 text-[#b7c8ba]">
+                        <span
+                            className="size-4 shrink-0 animate-spin rounded-full border-2 border-[#36433a] border-t-[#68f58a]"
+                            aria-hidden="true"
+                        />
+                        Loading instructions...
+                    </p>
+                ) : instructions.length > 0 ? (
                     <ul
                         className="min-w-max font-mono text-sm text-[#b7c8ba]"
                         aria-label="Transaction instruction tree"
