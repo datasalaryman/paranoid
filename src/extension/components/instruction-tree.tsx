@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
-import type { InstructionTreeNode } from '@/extension/messages';
+import type { ActiveRpcSummary, InstructionTreeNode } from '@/extension/messages';
+import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
 
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
@@ -52,9 +53,11 @@ const TOKEN_INSTRUCTIONS = [
 export function InstructionTree({
     instructions,
     isLoading = false,
+    rpc,
 }: {
     instructions: readonly InstructionTreeNode[];
     isLoading?: boolean;
+    rpc?: ActiveRpcSummary | null;
 }) {
     return (
         <section className="my-[1em]" aria-busy={isLoading}>
@@ -76,6 +79,7 @@ export function InstructionTree({
                         {instructions.map((instruction, index) => (
                             <InstructionNode
                                 instruction={instruction}
+                                rpc={rpc}
                                 key={`${index}:${instruction.programId}`}
                                 prefix=""
                                 last={index === instructions.length - 1}
@@ -94,10 +98,12 @@ function InstructionNode({
     instruction,
     prefix,
     last,
+    rpc,
 }: {
     instruction: InstructionTreeNode;
     prefix: string;
     last: boolean;
+    rpc?: ActiveRpcSummary | null;
 }) {
     const [expanded, setExpanded] = useState(true);
     const childrenId = useId();
@@ -117,24 +123,28 @@ function InstructionNode({
 
     return (
         <li>
-            {hasChildren ? (
-                <button
-                    type="button"
-                    className="cursor-pointer leading-6 whitespace-pre hover:text-[#e7f7e9] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#68f58a]"
-                    aria-expanded={expanded}
-                    aria-controls={childrenId}
-                    onClick={() => setExpanded((value) => !value)}
-                >
-                    {row}
-                </button>
-            ) : (
-                <div className="leading-6 whitespace-pre">{row}</div>
-            )}
+            <div className="flex items-center gap-2">
+                {hasChildren ? (
+                    <button
+                        type="button"
+                        className="cursor-pointer leading-6 whitespace-pre hover:text-[#e7f7e9] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#68f58a]"
+                        aria-expanded={expanded}
+                        aria-controls={childrenId}
+                        onClick={() => setExpanded((value) => !value)}
+                    >
+                        {row}
+                    </button>
+                ) : (
+                    <div className="leading-6 whitespace-pre">{row}</div>
+                )}
+                <SolanaIdentifierActions value={instruction.programId} rpc={rpc} />
+            </div>
             {hasChildren && expanded && (
                 <ul id={childrenId}>
                     {instruction.innerInstructions.map((innerInstruction, index) => (
                         <InstructionNode
                             instruction={innerInstruction}
+                            rpc={rpc}
                             key={`${index}:${innerInstruction.programId}`}
                             prefix={childPrefix}
                             last={index === instruction.innerInstructions.length - 1}

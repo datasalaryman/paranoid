@@ -369,7 +369,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
         if (request.method === 'signAndSendTransaction' && (await resolveRpcChain(rpc.url)) !== rpc.chain) {
             throw new Error('The active RPC changed clusters after it was added');
         }
-        const connection = new Connection(rpc.url, 'confirmed');
+        const connection = rpc.chain ? new Connection(rpc.url, 'confirmed') : null;
         switch (request.method) {
             case 'connect': {
                 const onlyIfTrusted = Boolean(
@@ -380,7 +380,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 if (!trusted) {
                     await requireApproval(origin, 'Connect to Paranoid?', [
                         `Account: ${keypair.publicKey.toBase58()}`,
-                        `Network: Solana ${rpc.name}`,
+                        `Network: ${rpc.chain ? `Solana ${rpc.name}` : 'Sign Only (any cluster)'}`,
                     ]);
                     await trust(origin);
                 }
@@ -420,12 +420,13 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 const transactions = (request.params as { transactions: number[][] }).transactions.map(deserialize);
                 await requireApproval(origin, 'Sign multiple transactions?', [
                     `${transactions.length} transactions`,
-                    `Network: Solana ${rpc.name}`,
+                    `Network: ${rpc.chain ? `Solana ${rpc.name}` : 'Sign Only (any cluster). Not simulated.'}`,
                 ]);
                 transactions.forEach((transaction) => sign(transaction, keypair));
                 return transactions.map((transaction) => Array.from(serialize(transaction)));
             }
             case 'signAndSendTransaction': {
+                if (!connection) throw new Error('Select an RPC to sign and send transactions');
                 await requireTrusted(origin);
                 const { transaction: bytes, options } = request.params as {
                     transaction: number[];
@@ -476,7 +477,13 @@ async function requireActiveRpc() {
     return rpc;
 }
 
-function validateRequestedChain(request: ProviderRequest, rpcChain: SolanaChain): void {
+export function validateRequestedChain(request: ProviderRequest, rpcChain: SolanaChain | null): void {
+    if (rpcChain === null) {
+        if (request.method === 'signAndSendTransaction') {
+            throw new Error('Select an RPC to sign and send transactions');
+        }
+        return;
+    }
     if (request.method === 'connect' || request.method === 'disconnect') return;
     const chain = (request.params as { chain?: SolanaChain } | undefined)?.chain;
     if (!chain) return;
@@ -512,7 +519,7 @@ async function getWalletStatus() {
                 url: activeRpc.url,
             },
             rpcs,
-            balance: activeRpc
+            balance: activeRpc?.chain
                 ? await new Connection(activeRpc.url, 'confirmed')
                       .getBalance(new PublicKey(publicKey))
                       .catch(() => null)
@@ -577,23 +584,39 @@ async function approveOrSaveTransactionForLater(
     options: SendOptions | undefined,
     keypair: Keypair,
     rpc: Awaited<ReturnType<typeof requireActiveRpc>>,
-    connection: Connection
+    connection: Connection | null
 ): Promise<void> {
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
     const lines = transactionLines(transaction, rpc.name);
-    const { balanceChanges, instructionTree } = await simulateTransactionDetails(connection, transaction);
+    if (!connection) {
+        lines.push('Sign Only: cluster is not checked. Transaction is not simulated or broadcast.');
+    }
+    const { balanceChanges, instructionTree } = connection
+        ? await simulateTransactionDetails(connection, transaction)
+        : {
+              balanceChanges: undefined,
+              instructionTree: buildInstructionTree(
+                  transaction,
+                  'version' in transaction
+                      ? transaction.message.staticAccountKeys
+                      : transaction.compileMessage().accountKeys,
+                  []
+              ),
+          };
     const transactionMessage = transactionMessageBase64(transaction);
     const decision = await requestApproval({
         origin,
         title,
         lines,
         transaction: true,
+        canSaveForLater: Boolean(connection),
         balanceChanges,
         instructionTree,
         transactionMessage,
     });
     if (decision === 'approve') return;
     if (decision === 'save-for-later') {
+        if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
         await saveTransaction(keypair.publicKey.toBase58(), rpc.id, {
             origin,
             title,
@@ -751,7 +774,7 @@ async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<Ap
 
 async function getActiveSavedTransactionSummaries(): Promise<SavedTransactionSummary[]> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
-    if (!keypair || !rpc) return [];
+    if (!keypair || !rpc?.chain) return [];
     const transactions = await listSavedTransactions(keypair.publicKey, rpc.id);
     const connection = new Connection(rpc.url, 'confirmed');
     const validityByBlockhash = new Map<string, Promise<boolean>>();
@@ -772,7 +795,7 @@ async function getActiveSavedTransactionSummaries(): Promise<SavedTransactionSum
 async function getActiveTransactionHistory(before?: string): Promise<TransactionHistoryPage> {
     const pageSize = 10;
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
-    if (!keypair || !rpc) return { transactions: [] };
+    if (!keypair || !rpc?.chain) return { transactions: [] };
 
     const cached = await listTransactionHistory(keypair.publicKey, rpc.id, before, pageSize);
     const connection = new Connection(rpc.url, 'confirmed');
@@ -824,7 +847,7 @@ async function getActiveTransactionHistory(before?: string): Promise<Transaction
 async function getActiveTransactionHistoryDetails(signature: string): Promise<TransactionHistoryDetails> {
     if (typeof signature !== 'string' || !signature) throw new Error('Transaction signature is required');
     const rpc = await getActiveRpc();
-    if (!rpc) throw new Error('Select an RPC first');
+    if (!rpc?.chain) throw new Error('Select an RPC first');
 
     const response = await new Connection(rpc.url, 'confirmed').getTransaction(signature, {
         commitment: 'confirmed',
@@ -852,14 +875,14 @@ async function getActiveTransactionHistoryDetails(signature: string): Promise<Tr
 
 async function getActiveSavedTransactionSummary(id: string): Promise<SavedTransactionSummary> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
-    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    if (!keypair || !rpc?.chain) throw new Error('Select a keypair and RPC first');
     const savedTransaction = (await listSavedTransactions(keypair.publicKey, rpc.id)).find(
         (transaction) => transaction.id === id
     );
     if (!savedTransaction) throw new Error('Saved transaction not found');
 
-    const connection = new Connection(rpc.url, 'confirmed');
     const transaction = deserialize(savedTransaction.transaction);
+    const connection = new Connection(rpc.url, 'confirmed');
     const expiredBlockhash = !(await connection.isBlockhashValid(recentBlockhash(transaction))).value;
     if (expiredBlockhash) return toSavedTransactionSummary(savedTransaction, true, transaction);
     const summary = toSavedTransactionSummary(savedTransaction, false, transaction);
@@ -895,18 +918,19 @@ function toSavedTransactionSummary(
 
 async function moveActiveSavedTransactionToTop(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
-    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    if (!keypair || !rpc?.chain) throw new Error('Select a keypair and RPC first');
     await moveSavedTransactionToTop(keypair.publicKey, rpc.id, id);
 }
 
 async function removeActiveSavedTransaction(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
-    if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
+    if (!keypair || !rpc?.chain) throw new Error('Select a keypair and RPC first');
     await removeSavedTransaction(keypair.publicKey, rpc.id, id);
 }
 
 async function refreshActiveSavedTransactionBlockhash(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
+    if (!rpc.chain) throw new Error('Blockhash refresh is unavailable in Sign Only mode');
     if (!keypair) throw new Error('Select a keypair first');
     const transactions = await listSavedTransactions(keypair.publicKey, rpc.id);
     const savedTransaction = transactions.find((transaction) => transaction.id === id);
@@ -931,11 +955,13 @@ export function replaceRecentBlockhash(transaction: Transaction | VersionedTrans
 
 async function signSavedTransaction(id: string): Promise<{ signature?: string }> {
     const [storedKeypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
+    if (!rpc.chain) throw new Error('Saved transactions are unavailable in Sign Only mode');
     if (!storedKeypair) throw new Error('Select a keypair first');
     const savedTransaction = await claimSavedTransaction(storedKeypair.publicKey, rpc.id, id);
 
     let keypair: Keypair | null = null;
     try {
+        validateRequestedChain({ channel: 'paranoid:page', id, method: savedTransaction.method }, rpc.chain);
         keypair = await getKeypair();
         if (keypair.publicKey.toBase58() !== storedKeypair.publicKey) {
             throw new Error('The active keypair changed before signing');

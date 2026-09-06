@@ -11,6 +11,7 @@ import { validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import {
     Link,
+    Navigate,
     Outlet,
     RouterProvider,
     createMemoryHistory,
@@ -21,6 +22,9 @@ import {
 } from '@tanstack/react-router';
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { TransactionInformation } from '@/extension/components/transaction-information';
+import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
+import { SignOnlyExplorerLinks } from '@/extension/components/sign-only-explorer-links';
+import { showToast, ToastNotification } from '@/extension/components/toast';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
 import type {
     ActiveRpcSummary,
@@ -33,7 +37,7 @@ import type {
     WalletStatus,
     WalletSummary,
 } from '@/extension/messages';
-import { getSolanaExplorerAccountTokensUrl, getSolanaExplorerTransactionUrl } from '@/lib/solana';
+import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
 
 const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
 const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
@@ -52,11 +56,7 @@ const rootRoute = createRootRoute({
     notFoundComponent: () => <ErrorView message="This wallet page does not exist." />,
 });
 
-type Toast = { message: string; tone: 'success' | 'error' };
-
 function WalletRoot() {
-    const [toast, setToast] = useState<Toast | null>(null);
-
     useEffect(() => {
         const reportActivity = () => {
             void chrome.runtime.sendMessage({ type: 'wallet:activity' }).catch(() => undefined);
@@ -75,37 +75,10 @@ function WalletRoot() {
         };
     }, []);
 
-    useEffect(() => {
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const listener = (event: Event) => {
-            const detail = (event as CustomEvent<Toast>).detail;
-            setToast(detail);
-            if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(() => setToast(null), 4000);
-        };
-        window.addEventListener('paranoid:toast', listener);
-        return () => {
-            window.removeEventListener('paranoid:toast', listener);
-            if (timeout) clearTimeout(timeout);
-        };
-    }, []);
-
     return (
         <>
             <Outlet />
-            {toast && (
-                <div
-                    className={`fixed right-4 bottom-4 left-4 z-50 rounded-[6px] border p-3 text-sm font-semibold shadow-lg ${
-                        toast.tone === 'success'
-                            ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]'
-                            : 'border-[#ff8f8f] bg-[#2a1717] text-[#ffd0d0]'
-                    }`}
-                    role="status"
-                    aria-live="polite"
-                >
-                    {toast.message}
-                </div>
-            )}
+            <ToastNotification />
         </>
     );
 }
@@ -686,6 +659,13 @@ function AddRpcPage() {
                     Use Testnet
                 </button>
                 <button
+                    className={secondaryButtonClassName}
+                    disabled={selectRpc.isPending}
+                    onClick={() => selectRpc.mutate('sign-only')}
+                >
+                    Sign Only
+                </button>
+                <button
                     className={`${secondaryButtonClassName} mt-2`}
                     disabled={selectRpc.isPending}
                     onClick={async () => {
@@ -705,7 +685,8 @@ function AddRpcPage() {
                 <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
             )}
             <p className={warningClassName}>
-                The selected RPC can observe your account activity and submitted transactions.
+                The selected RPC can observe your account activity and submitted transactions. Sign Only works across
+                clusters without an RPC, simulation, or broadcasting.
             </p>
         </WalletFrame>
     );
@@ -938,7 +919,7 @@ function PopupPage() {
     const active = status.data?.active;
     const activeRpc = status.data?.activeRpc;
     const explorerUrl =
-        active && activeRpc
+        active && activeRpc?.chain
             ? getSolanaExplorerAccountTokensUrl(
                   active.publicKey,
                   activeRpc.chain,
@@ -956,15 +937,22 @@ function PopupPage() {
                     activeRpc={activeRpc ?? null}
                 />
             }
-            bottomNav={<TransactionNavigation savedTransactionCount={savedTransactions.data?.length ?? 0} />}
+            bottomNav={
+                activeRpc?.chain && (
+                    <TransactionNavigation savedTransactionCount={savedTransactions.data?.length ?? 0} />
+                )
+            }
         >
-            <div className="mt-3 mb-6">
+            <div className="mt-3 mb-6 flex items-center gap-2">
                 <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
                     {truncateAddress(active?.publicKey)}
                 </h1>
+                {active && <SolanaIdentifierActions value={active.publicKey} rpc={activeRpc} />}
             </div>
             {status.isError ? (
                 <p className={errorClassName}>{errorMessage(status.error)}</p>
+            ) : activeRpc?.kind === 'sign-only' ? (
+                active && <SignOnlyExplorerLinks publicKey={active.publicKey} />
             ) : (
                 <div>
                     <p className={labelClassName}>Balance</p>
@@ -1012,7 +1000,7 @@ function TransactionHistoryPageView() {
     const savedTransactions = useSavedTransactions(active?.publicKey, rpc?.id);
     const history = useInfiniteQuery({
         queryKey: ['transaction-history', active?.publicKey, rpc?.id],
-        enabled: Boolean(active && rpc),
+        enabled: Boolean(active && rpc?.chain),
         initialPageParam: undefined as string | undefined,
         queryFn: ({ pageParam }) => sendMessage<TransactionHistoryPage>({ type: 'history:list', before: pageParam }),
         getNextPageParam: (page) => page.nextBefore,
@@ -1030,6 +1018,8 @@ function TransactionHistoryPageView() {
 
     const transactions = history.data?.pages.flatMap((page) => page.transactions) ?? [];
 
+    if (rpc?.kind === 'sign-only') return <Navigate to="/wallet" replace />;
+
     return (
         <WalletFrame
             eyebrow="PARANOID / TRANSACTION HISTORY"
@@ -1045,7 +1035,12 @@ function TransactionHistoryPageView() {
             </button>
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Transaction History</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
-                Recent transactions that included {truncateAddress(active?.publicKey)}.
+                Recent transactions that included{' '}
+                <span className="inline-flex items-center gap-1 align-middle">
+                    {truncateAddress(active?.publicKey)}
+                    {active && <SolanaIdentifierActions value={active.publicKey} rpc={rpc} />}
+                </span>
+                .
             </p>
             {(status.isError || history.isError) && (
                 <p className={errorClassName}>{errorMessage(status.error ?? history.error)}</p>
@@ -1055,20 +1050,23 @@ function TransactionHistoryPageView() {
             )}
             <div className="grid gap-2.5">
                 {transactions.map((transaction) => (
-                    <button
+                    <div
                         key={transaction.signature}
-                        className="block min-w-0 cursor-pointer rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9] hover:border-[#68f58a]"
-                        type="button"
-                        onClick={() =>
-                            navigate({
-                                to: '/transaction-history/$signature',
-                                params: { signature: transaction.signature },
-                            })
-                        }
+                        className="relative min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9] hover:border-[#68f58a]"
                     >
-                        <span className="block truncate font-mono text-sm font-semibold">
-                            {truncateSignature(transaction.signature)}
-                        </span>
+                        <div className="flex items-center gap-2">
+                            <Link
+                                className="min-w-0 truncate font-mono text-sm font-semibold no-underline after:absolute after:inset-0 focus-visible:outline-2 focus-visible:outline-[#68f58a]"
+                                to="/transaction-history/$signature"
+                                params={{ signature: transaction.signature }}
+                                title={transaction.signature}
+                            >
+                                {truncateSignature(transaction.signature)}
+                            </Link>
+                            <span className="relative z-10 inline-flex">
+                                <SolanaIdentifierActions value={transaction.signature} kind="signature" rpc={rpc} />
+                            </span>
+                        </div>
                         <span
                             className={`mt-2 block text-[11px] tracking-[0.08em] uppercase ${
                                 transaction.failed ? 'text-[#ff8f8f]' : 'text-[#68f58a]'
@@ -1083,7 +1081,7 @@ function TransactionHistoryPageView() {
                                 : 'Time unavailable'}
                             {transaction.memo ? ` / ${transaction.memo}` : ''}
                         </span>
-                    </button>
+                    </div>
                 ))}
             </div>
             <div ref={loadMoreRef} className="h-8" aria-hidden="true" />
@@ -1099,12 +1097,13 @@ function TransactionHistoryDetailsPage() {
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
     });
     const details = useQuery({
-        queryKey: ['transaction-history', signature],
+        queryKey: ['transaction-history', status.data?.active?.publicKey, status.data?.activeRpc?.id, signature],
+        enabled: Boolean(status.data?.activeRpc?.chain),
         queryFn: () => sendMessage<TransactionHistoryDetails>({ type: 'history:get', signature }),
     });
     const rpc = status.data?.activeRpc;
-    const customRpcUrl = rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
-    const explorerUrl = rpc ? getSolanaExplorerTransactionUrl(signature, rpc.chain, customRpcUrl) : undefined;
+
+    if (rpc?.kind === 'sign-only') return <Navigate to="/wallet" replace />;
 
     return (
         <WalletFrame eyebrow="PARANOID / TRANSACTION">
@@ -1116,22 +1115,14 @@ function TransactionHistoryDetailsPage() {
             </Link>
             <TransactionInformation
                 title={details.isPending ? 'Loading transaction...' : truncateSignature(signature)}
+                titleActions={<SolanaIdentifierActions value={signature} kind="signature" rpc={rpc} />}
+                rpc={rpc}
                 isLoading={details.isPending}
                 balanceChanges={details.data?.balanceChanges}
                 instructionTree={details.data?.instructionTree}
             />
             {(status.isError || details.isError) && (
                 <p className={errorClassName}>{errorMessage(status.error ?? details.error)}</p>
-            )}
-            {explorerUrl && (
-                <a
-                    className={`${buttonClassName} mt-6 block text-center no-underline`}
-                    href={explorerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                >
-                    View in Explorer
-                </a>
             )}
         </WalletFrame>
     );
@@ -1146,6 +1137,8 @@ function SavedTransactionsPage() {
     const savedTransactions = useSavedTransactions(status.data?.active?.publicKey, status.data?.activeRpc?.id);
     const freshTransactions = savedTransactions.data?.filter((transaction) => !transaction.expiredBlockhash) ?? [];
     const expiredTransactions = savedTransactions.data?.filter((transaction) => transaction.expiredBlockhash) ?? [];
+
+    if (status.data?.activeRpc?.kind === 'sign-only') return <Navigate to="/wallet" replace />;
 
     return (
         <WalletFrame
@@ -1285,8 +1278,13 @@ function SavedTransactionPage() {
     const { transactionId } = savedTransactionRoute.useParams();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
+    });
     const request = useQuery({
-        queryKey: ['saved-transactions', transactionId],
+        queryKey: ['saved-transactions', status.data?.active?.publicKey, status.data?.activeRpc?.id, transactionId],
+        enabled: Boolean(status.data?.activeRpc?.chain),
         queryFn: () => sendMessage<SavedTransactionSummary>({ type: 'saved-transactions:get', id: transactionId }),
     });
     const transaction = request.data;
@@ -1308,6 +1306,8 @@ function SavedTransactionPage() {
             }
         },
     });
+
+    if (status.data?.activeRpc?.kind === 'sign-only') return <Navigate to="/wallet" replace />;
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
@@ -1382,7 +1382,7 @@ function SavedTransactionPage() {
 function useSavedTransactions(publicKey?: string, rpcId?: string) {
     return useQuery({
         queryKey: ['saved-transactions', publicKey, rpcId],
-        enabled: Boolean(publicKey && rpcId),
+        enabled: Boolean(publicKey && rpcId && rpcId !== 'sign-only'),
         queryFn: () => sendMessage<SavedTransactionSummary[]>({ type: 'saved-transactions:list' }),
     });
 }
@@ -1511,6 +1511,7 @@ function AccountNavigation({
                         <KeypairSelectorRow
                             key={wallet.name}
                             wallet={wallet}
+                            rpc={activeRpc}
                             active={wallet.name === activeWallet?.name}
                             disabled={selectWallet.isPending}
                             onSelect={() => selectWallet.mutate(wallet.name)}
@@ -1564,6 +1565,9 @@ function AccountNavigation({
                         disabled={selectRpc.isPending || isRequestingPermission}
                         onClick={() => void addCustomRpc()}
                     />
+                    <p className="text-xs text-[#b7c8ba]">
+                        Sign Only signs for any app cluster without simulation. Sending requires an RPC.
+                    </p>
                     {(permissionError || selectRpc.isError) && (
                         <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
                     )}
@@ -1575,12 +1579,14 @@ function AccountNavigation({
 
 function KeypairSelectorRow({
     wallet,
+    rpc,
     active,
     disabled,
     onSelect,
     onRename,
 }: {
     wallet: WalletSummary;
+    rpc: ActiveRpcSummary | null;
     active: boolean;
     disabled: boolean;
     onSelect: () => void;
@@ -1592,16 +1598,24 @@ function KeypairSelectorRow({
                 active ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]' : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9]'
             }`}
         >
-            <button
-                className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-3 text-left text-sm hover:bg-[#202722] disabled:cursor-wait disabled:opacity-45"
-                type="button"
-                disabled={disabled}
-                aria-pressed={active}
-                onClick={onSelect}
-            >
-                <span className="block truncate font-semibold">{wallet.label}</span>
-                {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
-            </button>
+            <div className="min-w-0 flex-1 p-3">
+                <button
+                    className="block w-full min-w-0 cursor-pointer border-0 bg-transparent text-left text-sm hover:text-[#68f58a] disabled:cursor-wait disabled:opacity-45"
+                    type="button"
+                    disabled={disabled}
+                    aria-pressed={active}
+                    onClick={onSelect}
+                >
+                    <span className="block truncate font-semibold">{wallet.label}</span>
+                    {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
+                </button>
+                <div className="mt-1 flex items-center gap-1 text-xs text-[#829486]">
+                    <span className="font-mono" title={wallet.publicKey}>
+                        {truncateAddress(wallet.publicKey)}
+                    </span>
+                    <SolanaIdentifierActions value={wallet.publicKey} rpc={rpc} />
+                </div>
+            </div>
             <button
                 className="flex w-11 shrink-0 cursor-pointer items-center justify-center border-0 border-l border-[#36433a] bg-transparent text-[#b7c8ba] hover:bg-[#202722] hover:text-[#e7f7e9] disabled:cursor-wait disabled:opacity-45"
                 type="button"
@@ -1819,7 +1833,7 @@ function ApprovalPage() {
             />
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
-            <div className={`mt-6 grid ${request.data?.transaction ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
+            <div className={`mt-6 grid ${request.data?.canSaveForLater ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
                 <button
                     className={`${buttonClassName} bg-[#242b26] text-[#e7f7e9]`}
                     disabled={!request.data || decision.isPending}
@@ -1827,7 +1841,7 @@ function ApprovalPage() {
                 >
                     {request.data?.transaction ? 'Cancel' : 'Reject'}
                 </button>
-                {request.data?.transaction && (
+                {request.data?.canSaveForLater && (
                     <button
                         className={secondaryButtonClassName}
                         disabled={decision.isPending}
@@ -1897,10 +1911,6 @@ function ErrorView({ message, close = false }: { message: string; close?: boolea
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
-}
-
-function showToast(message: string, tone: Toast['tone']): void {
-    window.dispatchEvent(new CustomEvent<Toast>('paranoid:toast', { detail: { message, tone } }));
 }
 
 async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {

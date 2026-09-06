@@ -13,7 +13,43 @@ import {
     calculateSolBalanceChanges,
     replaceRecentBlockhash,
     transactionMessageBase64,
+    validateRequestedChain,
 } from './background';
+import type { ProviderRequest } from './messages';
+
+describe('validateRequestedChain', () => {
+    const request = (method: ProviderRequest['method'], chain?: string): ProviderRequest => ({
+        channel: 'paranoid:page',
+        id: 'test',
+        method,
+        params: { chain },
+    });
+
+    test('Sign Only permits single, batch, and message signing for any cluster', () => {
+        for (const method of ['signTransaction', 'signAllTransactions', 'signMessage'] as const) {
+            for (const chain of ['solana:mainnet', 'solana:devnet', 'solana:testnet', 'solana:localnet', undefined]) {
+                expect(() => validateRequestedChain(request(method, chain), null)).not.toThrow();
+            }
+        }
+    });
+
+    test('Sign Only rejects broadcasting with or without an explicit cluster', () => {
+        for (const chain of ['solana:devnet', undefined]) {
+            expect(() => validateRequestedChain(request('signAndSendTransaction', chain), null)).toThrow(
+                'Select an RPC to sign and send transactions'
+            );
+        }
+    });
+
+    test('RPC selections still reject mismatched clusters', () => {
+        for (const method of ['signTransaction', 'signAllTransactions', 'signAndSendTransaction'] as const) {
+            expect(() => validateRequestedChain(request(method, 'solana:mainnet'), 'solana:devnet')).toThrow(
+                'The dapp requested solana:mainnet, but the active RPC uses solana:devnet'
+            );
+            expect(() => validateRequestedChain(request(method, 'solana:devnet'), 'solana:devnet')).not.toThrow();
+        }
+    });
+});
 
 describe('calculateSolBalanceChanges', () => {
     test('calculates increases, decreases, unchanged balances, and account creation', () => {

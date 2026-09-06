@@ -32,3 +32,26 @@ test('does not show a simulation error box for successful details', () => {
     expect(markup).not.toContain('role="alert"');
     expect(markup).toContain('No SOL balance changes');
 });
+
+test('renders title actions beside the heading and forwards the RPC to account and program actions', () => {
+    const markup = renderToStaticMarkup(
+        <TransactionInformation
+            title="Transfer"
+            titleActions={<button type="button">Title action</button>}
+            rpc={{
+                id: 'test',
+                name: 'Testnet',
+                kind: 'testnet',
+                chain: 'solana:testnet',
+                url: 'https://api.testnet.solana.com',
+            }}
+            balanceChanges={[{ address: 'balance-account', lamports: 1 }]}
+            instructionTree={[{ programId: 'program-account', data: [], innerInstructions: [] }]}
+        />
+    );
+
+    expect(markup).toContain('Transfer</h1><button type="button">Title action</button>');
+    expect(markup).toContain('title="Copy address: balance-account"');
+    expect(markup).toContain('/address/balance-account?cluster=testnet');
+    expect(markup).toContain('/address/program-account?cluster=testnet');
+});

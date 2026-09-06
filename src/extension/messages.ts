@@ -21,6 +21,7 @@ export interface ApprovalDetails {
     title: string;
     lines: string[];
     transaction?: boolean;
+    canSaveForLater?: boolean;
     balanceChanges?: SolBalanceChange[];
     instructionTree?: InstructionTreeNode[];
     transactionMessage?: string;
@@ -81,8 +82,8 @@ export interface WalletStatus {
 export interface RpcSummary {
     id: string;
     name: string;
-    kind: 'localnet' | 'devnet' | 'testnet' | 'custom';
-    chain: SolanaChain;
+    kind: 'localnet' | 'devnet' | 'testnet' | 'custom' | 'sign-only';
+    chain: SolanaChain | null;
 }
 
 export interface ActiveRpcSummary extends RpcSummary {

@@ -13,8 +13,8 @@ export interface StoredKeypair {
 export interface RpcSummary {
     id: string;
     name: string;
-    kind: 'localnet' | 'devnet' | 'testnet' | 'custom';
-    chain: SolanaChain;
+    kind: 'localnet' | 'devnet' | 'testnet' | 'custom' | 'sign-only';
+    chain: SolanaChain | null;
 }
 
 interface StoredRpc {
@@ -87,6 +87,13 @@ const BUILT_IN_RPCS: ActiveRpc[] = [
         kind: 'testnet',
         chain: 'solana:testnet',
         url: 'https://api.testnet.solana.com',
+    },
+    {
+        id: 'sign-only',
+        name: 'Sign Only',
+        kind: 'sign-only',
+        chain: null,
+        url: '',
     },
 ];
 

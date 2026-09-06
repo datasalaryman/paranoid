@@ -1,8 +1,12 @@
+import type { ReactNode } from 'react';
 import { InstructionTree } from '@/extension/components/instruction-tree';
-import type { InstructionTreeNode, SolBalanceChange } from '@/extension/messages';
+import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
+import type { ActiveRpcSummary, InstructionTreeNode, SolBalanceChange } from '@/extension/messages';
 
 export interface TransactionInformationProps {
     title: string;
+    titleActions?: ReactNode;
+    rpc?: ActiveRpcSummary | null;
     isLoading?: boolean;
     origin?: string;
     simulationError?: string;
@@ -15,6 +19,8 @@ export interface TransactionInformationProps {
 
 export function TransactionInformation({
     title,
+    titleActions,
+    rpc,
     isLoading = false,
     origin,
     simulationError,
@@ -28,7 +34,10 @@ export function TransactionInformation({
 
     return (
         <>
-            <h1 className="mt-3 mb-5 text-2xl leading-[1.15] font-bold">{title}</h1>
+            <div className="mt-3 mb-5 flex items-center gap-2">
+                <h1 className="min-w-0 text-2xl leading-[1.15] font-bold [overflow-wrap:anywhere]">{title}</h1>
+                {titleActions}
+            </div>
             {origin !== undefined && (
                 <p className="my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px] [overflow-wrap:anywhere]">
                     {origin}
@@ -66,7 +75,10 @@ export function TransactionInformation({
                                     {changedBalances.map(({ address, lamports }) => (
                                         <tr className="[&+&]:border-t [&+&]:border-[#29332c]" key={address}>
                                             <td className="p-[14px] font-mono text-sm text-[#b7c8ba]" title={address}>
-                                                {truncateAddress(address)}
+                                                <div className="flex items-center gap-2">
+                                                    <span>{truncateAddress(address)}</span>
+                                                    <SolanaIdentifierActions value={address} rpc={rpc} />
+                                                </div>
                                             </td>
                                             <td
                                                 className={`p-[14px] text-right font-semibold whitespace-nowrap ${
@@ -88,7 +100,7 @@ export function TransactionInformation({
                 </section>
             )}
             {(isLoading || instructionTree) && (
-                <InstructionTree instructions={instructionTree ?? []} isLoading={isLoading} />
+                <InstructionTree instructions={instructionTree ?? []} isLoading={isLoading} rpc={rpc} />
             )}
             {transactionMessage && (
                 <TransactionMessageCopy
