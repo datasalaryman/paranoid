@@ -15,7 +15,8 @@ interface StoredTransactionHistory {
 }
 
 const DATABASE_NAME = 'paranoid-wallet';
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
+const SAVED_TRANSACTIONS_STORE = 'savedTransactions';
 const TRANSACTION_HISTORY_STORE = 'transactionHistories';
 
 export async function listTransactionHistory(
@@ -108,8 +109,8 @@ function openDatabase(): Promise<IDBDatabase> {
             if (!open.result.objectStoreNames.contains('settings')) {
                 open.result.createObjectStore('settings', { keyPath: 'key' });
             }
-            if (!open.result.objectStoreNames.contains('transactionQueues')) {
-                open.result.createObjectStore('transactionQueues', { keyPath: 'scope' });
+            if (!open.result.objectStoreNames.contains(SAVED_TRANSACTIONS_STORE)) {
+                open.result.createObjectStore(SAVED_TRANSACTIONS_STORE, { keyPath: 'scope' });
             }
             if (!open.result.objectStoreNames.contains(TRANSACTION_HISTORY_STORE)) {
                 open.result.createObjectStore(TRANSACTION_HISTORY_STORE, { keyPath: 'scope' });

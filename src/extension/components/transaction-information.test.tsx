@@ -5,7 +5,7 @@ import { TransactionInformation } from './transaction-information';
 test('shows simulation errors before saved balance changes without hiding transaction details', () => {
     const markup = renderToStaticMarkup(
         <TransactionInformation
-            title="Queued transfer"
+            title="Saved transfer"
             origin="https://example.com"
             simulationError={'Simulation failed: {"InstructionError":[7,{"Custom":6010}]}'}
             balanceChanges={[{ address: '11111111111111111111111111111111', lamports: -1_000_000_000 }]}
@@ -19,7 +19,7 @@ test('shows simulation errors before saved balance changes without hiding transa
     expect(markup).toContain('Simulation failed:');
     expect(markup.indexOf('Simulation failed:')).toBeLessThan(markup.indexOf('Account SOL changes'));
     expect(markup).toContain('previously saved details');
-    expect(markup).toContain('Queued transfer');
+    expect(markup).toContain('Saved transfer');
     expect(markup).toContain('https://example.com');
     expect(markup).toContain('-1 SOL');
     expect(markup).toContain('11111111111111111111111111111111');
@@ -27,7 +27,7 @@ test('shows simulation errors before saved balance changes without hiding transa
 });
 
 test('does not show a simulation error box for successful details', () => {
-    const markup = renderToStaticMarkup(<TransactionInformation title="Queued transfer" balanceChanges={[]} />);
+    const markup = renderToStaticMarkup(<TransactionInformation title="Saved transfer" balanceChanges={[]} />);
 
     expect(markup).not.toContain('role="alert"');
     expect(markup).toContain('No SOL balance changes');

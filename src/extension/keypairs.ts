@@ -47,11 +47,11 @@ interface VaultSettings {
 }
 
 const DATABASE_NAME = 'paranoid-wallet';
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const KEYPAIR_STORE = 'keypairs';
 const RPC_STORE = 'rpcs';
 const SETTINGS_STORE = 'settings';
-const TRANSACTION_QUEUE_STORE = 'transactionQueues';
+const SAVED_TRANSACTIONS_STORE = 'savedTransactions';
 const TRANSACTION_HISTORY_STORE = 'transactionHistories';
 const ACTIVE_KEY = 'activeKeypair';
 const ACTIVE_RPC_KEY = 'activeRpc';
@@ -296,18 +296,18 @@ export async function removeKeypair(name: string): Promise<void> {
     touchVault();
     const database = await openDatabase();
     const transaction = database.transaction(
-        [KEYPAIR_STORE, SETTINGS_STORE, TRANSACTION_QUEUE_STORE, TRANSACTION_HISTORY_STORE],
+        [KEYPAIR_STORE, SETTINGS_STORE, SAVED_TRANSACTIONS_STORE, TRANSACTION_HISTORY_STORE],
         'readwrite'
     );
     const keypairs = transaction.objectStore(KEYPAIR_STORE);
     const settings = transaction.objectStore(SETTINGS_STORE);
-    const queues = transaction.objectStore(TRANSACTION_QUEUE_STORE);
+    const savedTransactions = transaction.objectStore(SAVED_TRANSACTIONS_STORE);
     const histories = transaction.objectStore(TRANSACTION_HISTORY_STORE);
-    const [stored, allKeypairs, activeSetting, queueKeys, historyKeys] = await Promise.all([
+    const [stored, allKeypairs, activeSetting, savedTransactionKeys, historyKeys] = await Promise.all([
         request<StoredKeypair | undefined>(keypairs.get(name)),
         request<StoredKeypair[]>(keypairs.getAll()),
         request<{ key: string; value: string } | undefined>(settings.get(ACTIVE_KEY)),
-        request<IDBValidKey[]>(queues.getAllKeys()),
+        request<IDBValidKey[]>(savedTransactions.getAllKeys()),
         request<IDBValidKey[]>(histories.getAllKeys()),
     ]);
     if (!stored) {
@@ -325,12 +325,12 @@ export async function removeKeypair(name: string): Promise<void> {
         else settings.delete(ACTIVE_KEY);
     }
     if (!remaining.some((keypair) => keypair.publicKey === stored.publicKey)) {
-        const queuePrefix = `${stored.publicKey}:`;
-        queueKeys.forEach((key) => {
-            if (typeof key === 'string' && key.startsWith(queuePrefix)) queues.delete(key);
+        const scopePrefix = `${stored.publicKey}:`;
+        savedTransactionKeys.forEach((key) => {
+            if (typeof key === 'string' && key.startsWith(scopePrefix)) savedTransactions.delete(key);
         });
         historyKeys.forEach((key) => {
-            if (typeof key === 'string' && key.startsWith(queuePrefix)) histories.delete(key);
+            if (typeof key === 'string' && key.startsWith(scopePrefix)) histories.delete(key);
         });
     }
 
@@ -428,17 +428,17 @@ export async function removeRpc(id: string): Promise<void> {
     touchVault();
     const database = await openDatabase();
     const transaction = database.transaction(
-        [RPC_STORE, SETTINGS_STORE, TRANSACTION_QUEUE_STORE, TRANSACTION_HISTORY_STORE],
+        [RPC_STORE, SETTINGS_STORE, SAVED_TRANSACTIONS_STORE, TRANSACTION_HISTORY_STORE],
         'readwrite'
     );
     const rpcs = transaction.objectStore(RPC_STORE);
     const settings = transaction.objectStore(SETTINGS_STORE);
-    const queues = transaction.objectStore(TRANSACTION_QUEUE_STORE);
+    const savedTransactions = transaction.objectStore(SAVED_TRANSACTIONS_STORE);
     const histories = transaction.objectStore(TRANSACTION_HISTORY_STORE);
-    const [stored, activeSetting, queueKeys, historyKeys] = await Promise.all([
+    const [stored, activeSetting, savedTransactionKeys, historyKeys] = await Promise.all([
         request<StoredRpc | undefined>(rpcs.get(id)),
         request<{ key: string; value: string } | undefined>(settings.get(ACTIVE_RPC_KEY)),
-        request<IDBValidKey[]>(queues.getAllKeys()),
+        request<IDBValidKey[]>(savedTransactions.getAllKeys()),
         request<IDBValidKey[]>(histories.getAllKeys()),
     ]);
     if (!stored) {
@@ -448,8 +448,8 @@ export async function removeRpc(id: string): Promise<void> {
 
     rpcs.delete(id);
     if (activeSetting?.value === id) settings.put({ key: ACTIVE_RPC_KEY, value: BUILT_IN_RPCS[0]!.id });
-    queueKeys.forEach((key) => {
-        if (typeof key === 'string' && key.endsWith(`:${id}`)) queues.delete(key);
+    savedTransactionKeys.forEach((key) => {
+        if (typeof key === 'string' && key.endsWith(`:${id}`)) savedTransactions.delete(key);
     });
     historyKeys.forEach((key) => {
         if (typeof key === 'string' && key.endsWith(`:${id}`)) histories.delete(key);
@@ -704,8 +704,8 @@ function openDatabase(): Promise<IDBDatabase> {
             if (!open.result.objectStoreNames.contains(SETTINGS_STORE)) {
                 open.result.createObjectStore(SETTINGS_STORE, { keyPath: 'key' });
             }
-            if (!open.result.objectStoreNames.contains(TRANSACTION_QUEUE_STORE)) {
-                open.result.createObjectStore(TRANSACTION_QUEUE_STORE, { keyPath: 'scope' });
+            if (!open.result.objectStoreNames.contains(SAVED_TRANSACTIONS_STORE)) {
+                open.result.createObjectStore(SAVED_TRANSACTIONS_STORE, { keyPath: 'scope' });
             }
             if (!open.result.objectStoreNames.contains(TRANSACTION_HISTORY_STORE)) {
                 open.result.createObjectStore(TRANSACTION_HISTORY_STORE, { keyPath: 'scope' });

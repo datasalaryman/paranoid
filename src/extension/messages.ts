@@ -26,9 +26,9 @@ export interface ApprovalDetails {
     transactionMessage?: string;
 }
 
-export type ApprovalDecision = 'approve' | 'cancel' | 'defer';
+export type ApprovalDecision = 'approve' | 'cancel' | 'save-for-later';
 
-export interface QueuedTransactionSummary {
+export interface SavedTransactionSummary {
     id: string;
     origin: string;
     title: string;

@@ -14,7 +14,7 @@ import type {
     ApprovalDetails,
     InstructionTreeNode,
     ProviderRequest,
-    QueuedTransactionSummary,
+    SavedTransactionSummary,
     SolBalanceChange,
     TransactionHistoryDetails,
     TransactionHistoryPage,
@@ -41,16 +41,16 @@ import {
     updateRpc,
 } from '@/extension/keypairs';
 import {
-    claimQueuedTransaction,
-    enqueueTransaction,
-    listQueuedTransactions,
-    moveQueuedTransactionToTop,
-    refreshQueuedTransaction,
-    releaseQueuedTransaction,
-    removeQueuedTransaction,
-    type QueuedTransaction,
-    type QueuedTransactionMethod,
-} from '@/extension/transaction-queue';
+    claimSavedTransaction,
+    saveTransaction,
+    listSavedTransactions,
+    moveSavedTransactionToTop,
+    refreshSavedTransaction,
+    releaseSavedTransaction,
+    removeSavedTransaction,
+    type SavedTransaction,
+    type SavedTransactionMethod,
+} from '@/extension/saved-transactions';
 import {
     hasStoredTransaction,
     listTransactionHistory,
@@ -94,7 +94,9 @@ export function setupBackground(): void {
             if (pending) {
                 pendingApprovals.delete(message.id);
                 pending.resolve(
-                    message.decision === 'defer' || message.decision === 'cancel' || message.decision === 'approve'
+                    message.decision === 'save-for-later' ||
+                        message.decision === 'cancel' ||
+                        message.decision === 'approve'
                         ? message.decision
                         : message.approved
                           ? 'approve'
@@ -263,12 +265,12 @@ export function setupBackground(): void {
             return true;
         }
 
-        if (message?.type === 'queue:list') {
+        if (message?.type === 'saved-transactions:list') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            getActiveQueueSummaries()
+            getActiveSavedTransactionSummaries()
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -296,56 +298,56 @@ export function setupBackground(): void {
             return true;
         }
 
-        if (message?.type === 'queue:get') {
+        if (message?.type === 'saved-transactions:get') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            getActiveQueueSummary(message.id)
+            getActiveSavedTransactionSummary(message.id)
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
 
-        if (message?.type === 'queue:sign') {
+        if (message?.type === 'saved-transactions:sign') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            signQueuedTransaction(message.id)
+            signSavedTransaction(message.id)
                 .then(sendResponse)
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
 
-        if (message?.type === 'queue:defer') {
+        if (message?.type === 'saved-transactions:save-for-later') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            moveActiveQueuedTransactionToTop(message.id)
+            moveActiveSavedTransactionToTop(message.id)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
 
-        if (message?.type === 'queue:refresh-blockhash') {
+        if (message?.type === 'saved-transactions:refresh-blockhash') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            refreshActiveQueuedTransactionBlockhash(message.id)
+            refreshActiveSavedTransactionBlockhash(message.id)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
         }
 
-        if (message?.type === 'queue:remove') {
+        if (message?.type === 'saved-transactions:remove') {
             if (!isExtensionPage(sender)) {
-                sendResponse({ __error: 'The transaction queue is only available from Paranoid' });
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
                 return;
             }
-            removeActiveQueuedTransaction(message.id)
+            removeActiveSavedTransaction(message.id)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -400,7 +402,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 await requireTrusted(origin);
                 const bytes = (request.params as { transaction: number[] }).transaction;
                 const transaction = deserialize(bytes);
-                await approveOrDeferTransaction(
+                await approveOrSaveTransactionForLater(
                     origin,
                     transaction,
                     bytes,
@@ -430,7 +432,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     options?: SendOptions;
                 };
                 const transaction = deserialize(bytes);
-                await approveOrDeferTransaction(
+                await approveOrSaveTransactionForLater(
                     origin,
                     transaction,
                     bytes,
@@ -567,11 +569,11 @@ async function requireApproval(origin: string, title: string, lines: string[]): 
     if ((await decision) !== 'approve') throw new Error('User rejected the request');
 }
 
-async function approveOrDeferTransaction(
+async function approveOrSaveTransactionForLater(
     origin: string,
     transaction: Transaction | VersionedTransaction,
     bytes: number[],
-    method: QueuedTransactionMethod,
+    method: SavedTransactionMethod,
     options: SendOptions | undefined,
     keypair: Keypair,
     rpc: Awaited<ReturnType<typeof requireActiveRpc>>,
@@ -591,8 +593,8 @@ async function approveOrDeferTransaction(
         transactionMessage,
     });
     if (decision === 'approve') return;
-    if (decision === 'defer') {
-        await enqueueTransaction(keypair.publicKey.toBase58(), rpc.id, {
+    if (decision === 'save-for-later') {
+        await saveTransaction(keypair.publicKey.toBase58(), rpc.id, {
             origin,
             title,
             lines,
@@ -602,7 +604,7 @@ async function approveOrDeferTransaction(
             method,
             options,
         });
-        throw new Error('Transaction deferred');
+        throw new Error('Transaction saved for later');
     }
     throw new Error('User cancelled the request');
 }
@@ -747,10 +749,10 @@ async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<Ap
     return decision;
 }
 
-async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
+async function getActiveSavedTransactionSummaries(): Promise<SavedTransactionSummary[]> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) return [];
-    const transactions = await listQueuedTransactions(keypair.publicKey, rpc.id);
+    const transactions = await listSavedTransactions(keypair.publicKey, rpc.id);
     const connection = new Connection(rpc.url, 'confirmed');
     const validityByBlockhash = new Map<string, Promise<boolean>>();
     return Promise.all(
@@ -762,7 +764,7 @@ async function getActiveQueueSummaries(): Promise<QueuedTransactionSummary[]> {
                 validity = connection.isBlockhashValid(blockhash).then(({ value }) => value);
                 validityByBlockhash.set(blockhash, validity);
             }
-            return toQueueSummary(transaction, !(await validity), deserialized);
+            return toSavedTransactionSummary(transaction, !(await validity), deserialized);
         })
     );
 }
@@ -848,19 +850,19 @@ async function getActiveTransactionHistoryDetails(signature: string): Promise<Tr
     };
 }
 
-async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSummary> {
+async function getActiveSavedTransactionSummary(id: string): Promise<SavedTransactionSummary> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
-    const queued = (await listQueuedTransactions(keypair.publicKey, rpc.id)).find(
+    const savedTransaction = (await listSavedTransactions(keypair.publicKey, rpc.id)).find(
         (transaction) => transaction.id === id
     );
-    if (!queued) throw new Error('Queued transaction not found');
+    if (!savedTransaction) throw new Error('Saved transaction not found');
 
     const connection = new Connection(rpc.url, 'confirmed');
-    const transaction = deserialize(queued.transaction);
+    const transaction = deserialize(savedTransaction.transaction);
     const expiredBlockhash = !(await connection.isBlockhashValid(recentBlockhash(transaction))).value;
-    if (expiredBlockhash) return toQueueSummary(queued, true, transaction);
-    const summary = toQueueSummary(queued, false, transaction);
+    if (expiredBlockhash) return toSavedTransactionSummary(savedTransaction, true, transaction);
+    const summary = toSavedTransactionSummary(savedTransaction, false, transaction);
     try {
         return { ...summary, ...(await simulateTransactionDetails(connection, transaction)) };
     } catch (error) {
@@ -871,11 +873,11 @@ async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSumma
     }
 }
 
-function toQueueSummary(
-    transaction: QueuedTransaction,
+function toSavedTransactionSummary(
+    transaction: SavedTransaction,
     expiredBlockhash: boolean,
     deserialized: Transaction | VersionedTransaction
-): QueuedTransactionSummary {
+): SavedTransactionSummary {
     const { id, origin, title, lines, method, createdAt, balanceChanges, instructionTree } = transaction;
     return {
         id,
@@ -891,30 +893,30 @@ function toQueueSummary(
     };
 }
 
-async function moveActiveQueuedTransactionToTop(id: string): Promise<void> {
+async function moveActiveSavedTransactionToTop(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
-    await moveQueuedTransactionToTop(keypair.publicKey, rpc.id, id);
+    await moveSavedTransactionToTop(keypair.publicKey, rpc.id, id);
 }
 
-async function removeActiveQueuedTransaction(id: string): Promise<void> {
+async function removeActiveSavedTransaction(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc) throw new Error('Select a keypair and RPC first');
-    await removeQueuedTransaction(keypair.publicKey, rpc.id, id);
+    await removeSavedTransaction(keypair.publicKey, rpc.id, id);
 }
 
-async function refreshActiveQueuedTransactionBlockhash(id: string): Promise<void> {
+async function refreshActiveSavedTransactionBlockhash(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
     if (!keypair) throw new Error('Select a keypair first');
-    const transactions = await listQueuedTransactions(keypair.publicKey, rpc.id);
-    const queued = transactions.find((transaction) => transaction.id === id);
-    if (!queued) throw new Error('Queued transaction not found');
+    const transactions = await listSavedTransactions(keypair.publicKey, rpc.id);
+    const savedTransaction = transactions.find((transaction) => transaction.id === id);
+    if (!savedTransaction) throw new Error('Saved transaction not found');
 
     const connection = new Connection(rpc.url, 'confirmed');
-    const transaction = deserialize(queued.transaction);
+    const transaction = deserialize(savedTransaction.transaction);
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
     replaceRecentBlockhash(transaction, blockhash);
-    await refreshQueuedTransaction(keypair.publicKey, rpc.id, id, [...serialize(transaction)]);
+    await refreshSavedTransaction(keypair.publicKey, rpc.id, id, [...serialize(transaction)]);
 }
 
 export function replaceRecentBlockhash(transaction: Transaction | VersionedTransaction, blockhash: string): void {
@@ -927,10 +929,10 @@ export function replaceRecentBlockhash(transaction: Transaction | VersionedTrans
     }
 }
 
-async function signQueuedTransaction(id: string): Promise<{ signature?: string }> {
+async function signSavedTransaction(id: string): Promise<{ signature?: string }> {
     const [storedKeypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
     if (!storedKeypair) throw new Error('Select a keypair first');
-    const queued = await claimQueuedTransaction(storedKeypair.publicKey, rpc.id, id);
+    const savedTransaction = await claimSavedTransaction(storedKeypair.publicKey, rpc.id, id);
 
     let keypair: Keypair | null = null;
     try {
@@ -939,10 +941,10 @@ async function signQueuedTransaction(id: string): Promise<{ signature?: string }
             throw new Error('The active keypair changed before signing');
         }
         if ((await getActiveRpc())?.id !== rpc.id) throw new Error('The active RPC changed before signing');
-        const transaction = deserialize(queued.transaction);
+        const transaction = deserialize(savedTransaction.transaction);
         sign(transaction, keypair);
         let signature: string | undefined;
-        if (queued.method === 'signAndSendTransaction') {
+        if (savedTransaction.method === 'signAndSendTransaction') {
             if ((await resolveRpcChain(rpc.url)) !== rpc.chain) {
                 throw new Error('The active RPC changed clusters after it was added');
             }
@@ -952,12 +954,12 @@ async function signQueuedTransaction(id: string): Promise<{ signature?: string }
                     ? await connection.simulateTransaction(transaction)
                     : await connection.simulateTransaction(transaction);
             if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
-            signature = await connection.sendRawTransaction(serialize(transaction), queued.options);
+            signature = await connection.sendRawTransaction(serialize(transaction), savedTransaction.options);
         }
-        await removeQueuedTransaction(storedKeypair.publicKey, rpc.id, id);
+        await removeSavedTransaction(storedKeypair.publicKey, rpc.id, id);
         return signature ? { signature } : {};
     } catch (error) {
-        await releaseQueuedTransaction(storedKeypair.publicKey, rpc.id, id).catch(() => undefined);
+        await releaseSavedTransaction(storedKeypair.publicKey, rpc.id, id).catch(() => undefined);
         throw error;
     } finally {
         keypair?.secretKey.fill(0);
@@ -975,7 +977,7 @@ function deserialize(bytes: number[]): Transaction | VersionedTransaction {
 
 function recentBlockhash(transaction: Transaction | VersionedTransaction): string {
     const blockhash = 'version' in transaction ? transaction.message.recentBlockhash : transaction.recentBlockhash;
-    if (!blockhash) throw new Error('Queued transaction does not have a recent blockhash');
+    if (!blockhash) throw new Error('Saved transaction does not have a recent blockhash');
     return blockhash;
 }
 

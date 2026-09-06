@@ -26,7 +26,7 @@ import type {
     ActiveRpcSummary,
     ApprovalDecision,
     ApprovalDetails,
-    QueuedTransactionSummary,
+    SavedTransactionSummary,
     RpcSummary,
     TransactionHistoryDetails,
     TransactionHistoryPage,
@@ -185,16 +185,16 @@ const approvalRoute = createRoute({
     component: ApprovalPage,
 });
 
-const transactionQueueRoute = createRoute({
+const savedTransactionsRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/transaction-queue',
-    component: TransactionQueuePage,
+    path: '/saved-transactions',
+    component: SavedTransactionsPage,
 });
 
-const queuedTransactionRoute = createRoute({
+const savedTransactionRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/transaction-queue/$transactionId',
-    component: QueuedTransactionPage,
+    path: '/saved-transactions/$transactionId',
+    component: SavedTransactionPage,
 });
 
 const transactionHistoryRoute = createRoute({
@@ -222,8 +222,8 @@ const routeTree = rootRoute.addChildren([
     customRpcRoute,
     rpcSettingsRoute,
     approvalRoute,
-    transactionQueueRoute,
-    queuedTransactionRoute,
+    savedTransactionsRoute,
+    savedTransactionRoute,
     transactionHistoryRoute,
     transactionHistoryDetailsRoute,
 ]);
@@ -553,7 +553,7 @@ function RenameKeypairPage() {
     const remove = useMutation({
         mutationFn: () => sendMessage<boolean>({ type: 'wallet:remove', name: keypairName }),
         onSuccess: async () => {
-            queryClient.removeQueries({ queryKey: ['transaction-queue'] });
+            queryClient.removeQueries({ queryKey: ['saved-transactions'] });
             await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
             showToast('Keypair removed.', 'success');
             await navigate({ to: nextWalletPath(await getWalletStatus()) });
@@ -609,7 +609,7 @@ function RenameKeypairPage() {
             <section className="mt-8 border-t border-[#36433a] pt-5">
                 <h2 className="m-0 text-sm font-bold text-[#ff8f8f]">Remove keypair</h2>
                 <p className="my-3 text-xs leading-normal text-[#b7c8ba]">
-                    This permanently removes the encrypted keypair and its queued transactions from this browser.
+                    This permanently removes the encrypted keypair and its saved transactions from this browser.
                 </p>
                 {remove.isError && <p className={errorClassName}>{errorMessage(remove.error)}</p>}
                 {confirmingRemoval ? (
@@ -808,7 +808,7 @@ function RpcSettingsPage() {
         mutationFn: () => sendMessage<boolean>({ type: 'wallet:remove-rpc', id: rpcId }),
         onSuccess: async () => {
             queryClient.removeQueries({ queryKey: ['rpc', rpcId] });
-            queryClient.removeQueries({ queryKey: ['transaction-queue'] });
+            queryClient.removeQueries({ queryKey: ['saved-transactions'] });
             await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
             showToast('Custom RPC removed.', 'success');
             await navigate({ to: '/wallet' });
@@ -889,7 +889,7 @@ function RpcSettingsPage() {
             <section className="mt-8 border-t border-[#36433a] pt-5">
                 <h2 className="m-0 text-sm font-bold text-[#ff8f8f]">Remove custom RPC</h2>
                 <p className="my-3 text-xs leading-normal text-[#b7c8ba]">
-                    This permanently removes the encrypted URL and its queued transactions from this browser.
+                    This permanently removes the encrypted URL and its saved transactions from this browser.
                 </p>
                 {remove.isError && <p className={errorClassName}>{errorMessage(remove.error)}</p>}
                 {confirmingRemoval ? (
@@ -930,7 +930,7 @@ function PopupPage() {
         queryKey: ['wallet-status'],
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
     });
-    const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
+    const savedTransactions = useSavedTransactions(status.data?.active?.publicKey, status.data?.activeRpc?.id);
 
     if (!status.isPending && !status.isError && !status.data.active) return <AddKeypairPage />;
     if (!status.isPending && !status.isError && !status.data.activeRpc) return <AddRpcPage />;
@@ -956,7 +956,7 @@ function PopupPage() {
                     activeRpc={activeRpc ?? null}
                 />
             }
-            bottomNav={<TransactionNavigation queueCount={queue.data?.length ?? 0} />}
+            bottomNav={<TransactionNavigation savedTransactionCount={savedTransactions.data?.length ?? 0} />}
         >
             <div className="mt-3 mb-6">
                 <h1 className="m-0 font-mono text-2xl leading-[1.15] font-bold">
@@ -1009,7 +1009,7 @@ function TransactionHistoryPageView() {
     });
     const active = status.data?.active;
     const rpc = status.data?.activeRpc;
-    const queue = useTransactionQueue(active?.publicKey, rpc?.id);
+    const savedTransactions = useSavedTransactions(active?.publicKey, rpc?.id);
     const history = useInfiniteQuery({
         queryKey: ['transaction-history', active?.publicKey, rpc?.id],
         enabled: Boolean(active && rpc),
@@ -1033,7 +1033,9 @@ function TransactionHistoryPageView() {
     return (
         <WalletFrame
             eyebrow="PARANOID / TRANSACTION HISTORY"
-            bottomNav={<TransactionNavigation active="history" queueCount={queue.data?.length ?? 0} />}
+            bottomNav={
+                <TransactionNavigation active="history" savedTransactionCount={savedTransactions.data?.length ?? 0} />
+            }
         >
             <button
                 className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
@@ -1135,20 +1137,25 @@ function TransactionHistoryDetailsPage() {
     );
 }
 
-function TransactionQueuePage() {
+function SavedTransactionsPage() {
     const navigate = useNavigate();
     const status = useQuery({
         queryKey: ['wallet-status'],
         queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
     });
-    const queue = useTransactionQueue(status.data?.active?.publicKey, status.data?.activeRpc?.id);
-    const freshTransactions = queue.data?.filter((transaction) => !transaction.expiredBlockhash) ?? [];
-    const expiredTransactions = queue.data?.filter((transaction) => transaction.expiredBlockhash) ?? [];
+    const savedTransactions = useSavedTransactions(status.data?.active?.publicKey, status.data?.activeRpc?.id);
+    const freshTransactions = savedTransactions.data?.filter((transaction) => !transaction.expiredBlockhash) ?? [];
+    const expiredTransactions = savedTransactions.data?.filter((transaction) => transaction.expiredBlockhash) ?? [];
 
     return (
         <WalletFrame
-            eyebrow="PARANOID / TRANSACTION QUEUE"
-            bottomNav={<TransactionNavigation active="queue" queueCount={queue.data?.length ?? 0} />}
+            eyebrow="PARANOID / SAVED TRANSACTIONS"
+            bottomNav={
+                <TransactionNavigation
+                    active="saved-transactions"
+                    savedTransactionCount={savedTransactions.data?.length ?? 0}
+                />
+            }
         >
             <button
                 className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
@@ -1156,29 +1163,27 @@ function TransactionQueuePage() {
             >
                 &lt; Account
             </button>
-            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Transaction Queue</h1>
-            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
-                Deferred transactions for this keypair and RPC.
-            </p>
-            {(status.isError || queue.isError) && (
-                <p className={errorClassName}>{errorMessage(status.error ?? queue.error)}</p>
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Saved Transactions</h1>
+            <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">Saved transactions for this keypair and RPC.</p>
+            {(status.isError || savedTransactions.isError) && (
+                <p className={errorClassName}>{errorMessage(status.error ?? savedTransactions.error)}</p>
             )}
-            {!queue.isPending && queue.data?.length === 0 && (
-                <p className={panelClassName}>There are no deferred transactions.</p>
+            {!savedTransactions.isPending && savedTransactions.data?.length === 0 && (
+                <p className={panelClassName}>There are no saved transactions.</p>
             )}
-            <TransactionQueueGroup title="Fresh transactions" transactions={freshTransactions} navigate={navigate} />
-            <TransactionQueueGroup title="Expired blockhash" transactions={expiredTransactions} navigate={navigate} />
+            <SavedTransactionGroup title="Fresh transactions" transactions={freshTransactions} navigate={navigate} />
+            <SavedTransactionGroup title="Expired blockhash" transactions={expiredTransactions} navigate={navigate} />
         </WalletFrame>
     );
 }
 
-function TransactionQueueGroup({
+function SavedTransactionGroup({
     title,
     transactions,
     navigate,
 }: {
     title: string;
-    transactions: QueuedTransactionSummary[];
+    transactions: SavedTransactionSummary[];
     navigate: ReturnType<typeof useNavigate>;
 }) {
     return (
@@ -1188,18 +1193,18 @@ function TransactionQueueGroup({
             </h2>
             <div className="grid gap-2.5">
                 {transactions.map((transaction) => (
-                    <TransactionQueueItem key={transaction.id} transaction={transaction} navigate={navigate} />
+                    <SavedTransactionItem key={transaction.id} transaction={transaction} navigate={navigate} />
                 ))}
             </div>
         </section>
     );
 }
 
-function TransactionQueueItem({
+function SavedTransactionItem({
     transaction,
     navigate,
 }: {
-    transaction: QueuedTransactionSummary;
+    transaction: SavedTransactionSummary;
     navigate: ReturnType<typeof useNavigate>;
 }) {
     const [expanded, setExpanded] = useState(false);
@@ -1207,13 +1212,13 @@ function TransactionQueueItem({
     const queryClient = useQueryClient();
     const decision = useMutation({
         mutationFn: (value: 'refresh-blockhash' | 'remove') =>
-            sendMessage<boolean>({ type: `queue:${value}`, id: transaction.id }),
+            sendMessage<boolean>({ type: `saved-transactions:${value}`, id: transaction.id }),
         onSuccess: async (_, value) => {
             showToast(
-                value === 'remove' ? 'Transaction removed from the queue.' : 'Transaction blockhash refreshed.',
+                value === 'remove' ? 'Saved transaction removed.' : 'Transaction blockhash refreshed.',
                 'success'
             );
-            await queryClient.invalidateQueries({ queryKey: ['transaction-queue'] });
+            await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
         },
     });
 
@@ -1243,7 +1248,7 @@ function TransactionQueueItem({
                         disabled={decision.isPending}
                         onClick={() =>
                             navigate({
-                                to: '/transaction-queue/$transactionId',
+                                to: '/saved-transactions/$transactionId',
                                 params: { transactionId: transaction.id },
                             })
                         }
@@ -1276,26 +1281,26 @@ function TransactionQueueItem({
     );
 }
 
-function QueuedTransactionPage() {
-    const { transactionId } = queuedTransactionRoute.useParams();
+function SavedTransactionPage() {
+    const { transactionId } = savedTransactionRoute.useParams();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const request = useQuery({
-        queryKey: ['transaction-queue', transactionId],
-        queryFn: () => sendMessage<QueuedTransactionSummary>({ type: 'queue:get', id: transactionId }),
+        queryKey: ['saved-transactions', transactionId],
+        queryFn: () => sendMessage<SavedTransactionSummary>({ type: 'saved-transactions:get', id: transactionId }),
     });
     const transaction = request.data;
     const decision = useMutation({
-        mutationFn: (value: 'sign' | 'defer' | 'refresh-blockhash' | 'remove') =>
-            sendMessage<{ signature?: string } | boolean>({ type: `queue:${value}`, id: transactionId }),
+        mutationFn: (value: 'sign' | 'save-for-later' | 'refresh-blockhash' | 'remove') =>
+            sendMessage<{ signature?: string } | boolean>({ type: `saved-transactions:${value}`, id: transactionId }),
         onSuccess: async (_, value) => {
             if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
                 showToast('Transaction signed and sent successfully.', 'success');
             }
             if (value === 'refresh-blockhash') showToast('Transaction blockhash refreshed.', 'success');
-            if (value === 'remove') showToast('Transaction removed from the queue.', 'success');
-            await queryClient.invalidateQueries({ queryKey: ['transaction-queue'] });
-            await navigate({ to: '/transaction-queue' });
+            if (value === 'remove') showToast('Saved transaction removed.', 'success');
+            await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
+            await navigate({ to: '/saved-transactions' });
         },
         onError: (error, value) => {
             if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
@@ -1308,9 +1313,9 @@ function QueuedTransactionPage() {
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
             <Link
                 className="mb-4 inline-block text-xs text-[#b7c8ba] no-underline hover:text-[#e7f7e9]"
-                to="/transaction-queue"
+                to="/saved-transactions"
             >
-                &lt; Transaction Queue
+                &lt; Saved Transactions
             </Link>
             {request.isError && <p className={errorClassName}>{errorMessage(request.error)}</p>}
             <TransactionInformation
@@ -1332,16 +1337,16 @@ function QueuedTransactionPage() {
                 <button
                     className={secondaryButtonClassName}
                     disabled={!transaction || decision.isPending}
-                    onClick={() => navigate({ to: '/transaction-queue' })}
+                    onClick={() => navigate({ to: '/saved-transactions' })}
                 >
                     Cancel
                 </button>
                 <button
                     className={secondaryButtonClassName}
                     disabled={!transaction || decision.isPending}
-                    onClick={() => decision.mutate('defer')}
+                    onClick={() => decision.mutate('save-for-later')}
                 >
-                    Defer
+                    Save for Later
                 </button>
                 {transaction?.expiredBlockhash ? (
                     <button
@@ -1374,23 +1379,29 @@ function QueuedTransactionPage() {
     );
 }
 
-function useTransactionQueue(publicKey?: string, rpcId?: string) {
+function useSavedTransactions(publicKey?: string, rpcId?: string) {
     return useQuery({
-        queryKey: ['transaction-queue', publicKey, rpcId],
+        queryKey: ['saved-transactions', publicKey, rpcId],
         enabled: Boolean(publicKey && rpcId),
-        queryFn: () => sendMessage<QueuedTransactionSummary[]>({ type: 'queue:list' }),
+        queryFn: () => sendMessage<SavedTransactionSummary[]>({ type: 'saved-transactions:list' }),
     });
 }
 
-function TransactionNavigation({ active, queueCount }: { active?: 'queue' | 'history'; queueCount: number }) {
+function TransactionNavigation({
+    active,
+    savedTransactionCount,
+}: {
+    active?: 'saved-transactions' | 'history';
+    savedTransactionCount: number;
+}) {
     const navigate = useNavigate();
     return (
         <nav className="sticky bottom-0 grid grid-cols-2 divide-x divide-[#36433a] border-t border-[#36433a] bg-[#151a17]">
             <TransactionNavButton
-                label="Transaction Queue"
-                value={`${queueCount} queued`}
-                active={active === 'queue'}
-                onClick={() => navigate({ to: '/transaction-queue' })}
+                label="Saved Transactions"
+                value={`${savedTransactionCount} saved`}
+                active={active === 'saved-transactions'}
+                onClick={() => navigate({ to: '/saved-transactions' })}
             />
             <TransactionNavButton
                 label="Transaction History"
@@ -1820,9 +1831,9 @@ function ApprovalPage() {
                     <button
                         className={secondaryButtonClassName}
                         disabled={decision.isPending}
-                        onClick={() => decision.mutate('defer')}
+                        onClick={() => decision.mutate('save-for-later')}
                     >
-                        Defer
+                        Save for Later
                     </button>
                 )}
                 <button
