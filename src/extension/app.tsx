@@ -19,7 +19,7 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { TransactionInformation } from '@/extension/components/transaction-information';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
 import type {
@@ -1188,9 +1188,59 @@ function TransactionQueueGroup({
             </h2>
             <div className="grid gap-2.5">
                 {transactions.map((transaction) => (
+                    <TransactionQueueItem key={transaction.id} transaction={transaction} navigate={navigate} />
+                ))}
+            </div>
+        </section>
+    );
+}
+
+function TransactionQueueItem({
+    transaction,
+    navigate,
+}: {
+    transaction: QueuedTransactionSummary;
+    navigate: ReturnType<typeof useNavigate>;
+}) {
+    const [expanded, setExpanded] = useState(false);
+    const actionsId = useId();
+    const queryClient = useQueryClient();
+    const decision = useMutation({
+        mutationFn: (value: 'refresh-blockhash' | 'remove') =>
+            sendMessage<boolean>({ type: `queue:${value}`, id: transaction.id }),
+        onSuccess: async (_, value) => {
+            showToast(
+                value === 'remove' ? 'Transaction removed from the queue.' : 'Transaction blockhash refreshed.',
+                'success'
+            );
+            await queryClient.invalidateQueries({ queryKey: ['transaction-queue'] });
+        },
+    });
+
+    return (
+        <div className="min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] text-[#e7f7e9]">
+            <button
+                className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-[14px] text-left text-inherit"
+                aria-expanded={expanded}
+                aria-controls={actionsId}
+                onClick={() => setExpanded(!expanded)}
+            >
+                <span className="min-w-0 flex-1">
+                    <span className="block font-semibold">{transaction.title}</span>
+                    <span className="mt-1 block truncate text-xs text-[#b7c8ba]">{transaction.origin}</span>
+                    <span className="mt-2 block text-[11px] tracking-[0.08em] text-[#68f58a] uppercase">
+                        {new Date(transaction.createdAt).toLocaleString()}
+                    </span>
+                </span>
+                <span aria-hidden="true" className="text-[#68f58a]">
+                    {expanded ? '-' : '+'}
+                </span>
+            </button>
+            <div id={actionsId} hidden={!expanded} className="border-t border-[#36433a] p-[14px]">
+                <div className="grid grid-cols-2 gap-2.5">
                     <button
-                        key={transaction.id}
-                        className="cursor-pointer rounded-[6px] border border-[#36433a] bg-[#151a17] p-[14px] text-left text-[#e7f7e9]"
+                        className={buttonClassName}
+                        disabled={decision.isPending}
                         onClick={() =>
                             navigate({
                                 to: '/transaction-queue/$transactionId',
@@ -1198,15 +1248,31 @@ function TransactionQueueGroup({
                             })
                         }
                     >
-                        <span className="block font-semibold">{transaction.title}</span>
-                        <span className="mt-1 block truncate text-xs text-[#b7c8ba]">{transaction.origin}</span>
-                        <span className="mt-2 block text-[11px] tracking-[0.08em] text-[#68f58a] uppercase">
-                            {new Date(transaction.createdAt).toLocaleString()}
-                        </span>
+                        View
                     </button>
-                ))}
+                    <button className={secondaryButtonClassName} onClick={() => setExpanded(false)}>
+                        Cancel
+                    </button>
+                    <button
+                        className={secondaryButtonClassName}
+                        disabled={decision.isPending}
+                        onClick={() => decision.mutate('remove')}
+                    >
+                        Remove
+                    </button>
+                    {transaction.expiredBlockhash && (
+                        <button
+                            className={secondaryButtonClassName}
+                            disabled={decision.isPending}
+                            onClick={() => decision.mutate('refresh-blockhash')}
+                        >
+                            Refresh Blockhash
+                        </button>
+                    )}
+                </div>
+                {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
             </div>
-        </section>
+        </div>
     );
 }
 
@@ -1238,13 +1304,20 @@ function QueuedTransactionPage() {
         },
     });
 
-    if (request.isError) return <ErrorView message={errorMessage(request.error)} />;
-
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
+            <Link
+                className="mb-4 inline-block text-xs text-[#b7c8ba] no-underline hover:text-[#e7f7e9]"
+                to="/transaction-queue"
+            >
+                &lt; Transaction Queue
+            </Link>
+            {request.isError && <p className={errorClassName}>{errorMessage(request.error)}</p>}
             <TransactionInformation
-                title={transaction?.title ?? 'Loading transaction...'}
+                title={transaction?.title ?? (request.isPending ? 'Loading transaction...' : 'Transaction unavailable')}
+                isLoading={request.isPending}
                 origin={transaction?.origin}
+                simulationError={transaction?.simulationError}
                 balanceChanges={transaction?.balanceChanges}
                 instructionTree={transaction?.instructionTree}
                 transactionMessage={transaction?.transactionMessage}

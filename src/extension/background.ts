@@ -860,10 +860,15 @@ async function getActiveQueueSummary(id: string): Promise<QueuedTransactionSumma
     const transaction = deserialize(queued.transaction);
     const expiredBlockhash = !(await connection.isBlockhashValid(recentBlockhash(transaction))).value;
     if (expiredBlockhash) return toQueueSummary(queued, true, transaction);
-    return {
-        ...toQueueSummary(queued, false, transaction),
-        ...(await simulateTransactionDetails(connection, transaction)),
-    };
+    const summary = toQueueSummary(queued, false, transaction);
+    try {
+        return { ...summary, ...(await simulateTransactionDetails(connection, transaction)) };
+    } catch (error) {
+        return {
+            ...summary,
+            simulationError: error instanceof Error ? error.message : String(error),
+        };
+    }
 }
 
 function toQueueSummary(

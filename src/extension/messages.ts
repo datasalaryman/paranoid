@@ -36,6 +36,7 @@ export interface QueuedTransactionSummary {
     method: 'signTransaction' | 'signAndSendTransaction';
     createdAt: number;
     expiredBlockhash: boolean;
+    simulationError?: string;
     balanceChanges?: SolBalanceChange[];
     instructionTree?: InstructionTreeNode[];
     transactionMessage: string;

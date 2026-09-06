@@ -5,6 +5,7 @@ export interface TransactionInformationProps {
     title: string;
     isLoading?: boolean;
     origin?: string;
+    simulationError?: string;
     balanceChanges?: readonly SolBalanceChange[];
     instructionTree?: readonly InstructionTreeNode[];
     transactionMessage?: string;
@@ -16,6 +17,7 @@ export function TransactionInformation({
     title,
     isLoading = false,
     origin,
+    simulationError,
     balanceChanges,
     instructionTree,
     transactionMessage,
@@ -31,6 +33,18 @@ export function TransactionInformation({
                 <p className="my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px] [overflow-wrap:anywhere]">
                     {origin}
                 </p>
+            )}
+            {simulationError && (
+                <div
+                    role="alert"
+                    className="my-[1em] rounded-[6px] border border-[#ff8f8f] bg-[#2a1717] p-[14px] text-sm text-[#ffd0d0] [overflow-wrap:anywhere]"
+                >
+                    <p className="m-0 whitespace-pre-wrap">{simulationError}</p>
+                    <p className="mb-0 mt-2 text-xs">
+                        Current simulation results are unavailable. Any balance changes and instructions shown below are
+                        previously saved details and may be out of date.
+                    </p>
+                </div>
             )}
             {(isLoading || changedBalances) && (
                 <section className="my-[1em]" aria-busy={isLoading}>
