@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test, spyOn } from 'bun:test';
 import {
     Keypair,
+    Connection,
     PublicKey,
     SystemProgram,
     Transaction,
@@ -17,6 +18,226 @@ import {
     validateRequestedChain,
 } from './background';
 import type { ProviderRequest } from './messages';
+import * as keypairs from './keypairs';
+
+test('Send SOL restricts senders and signs only approved, unexpired transactions in the pinned context', async () => {
+    const originalChrome = globalThis.chrome;
+    const payer = Keypair.generate();
+    const recipient = Keypair.generate().publicKey;
+    const blockhash = Keypair.generate().publicKey.toBase58();
+    const account = {
+        name: 'payer',
+        publicKey: payer.publicKey.toBase58(),
+        createdAt: 0,
+        encryptedSecretKey: { iv: [], ciphertext: [] },
+    };
+    const rpc: keypairs.ActiveRpc = {
+        id: 'devnet',
+        name: 'Devnet',
+        kind: 'devnet',
+        chain: 'solana:devnet',
+        url: 'https://api.devnet.solana.com',
+    };
+    let listener: Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+    let approvalId = '';
+    let approvalReady: () => void = () => {};
+    let pendingResult: Promise<unknown> | undefined;
+    globalThis.chrome = {
+        windows: {
+            onRemoved: { addListener() {} },
+            async create({ url }: { url: string }) {
+                approvalId = new URL(url).searchParams.get('id')!;
+                approvalReady();
+                return {};
+            },
+        },
+        runtime: {
+            id: 'paranoid',
+            getURL: (path: string) => `chrome-extension://paranoid/${path}`,
+            onMessage: {
+                addListener(value: typeof listener) {
+                    listener = value;
+                },
+            },
+        },
+    } as unknown as typeof chrome;
+    const activeAccount = spyOn(keypairs, 'getActiveKeypair').mockResolvedValue(account);
+    const activeRpc = spyOn(keypairs, 'getActiveRpc').mockResolvedValue(rpc);
+    let secret = new Uint8Array();
+    const signer = spyOn(keypairs, 'getActiveSigner').mockImplementation(async () => {
+        const copy = Keypair.fromSecretKey(payer.secretKey);
+        secret = copy.secretKey;
+        return { publicKey: copy.publicKey, secretKey: secret } as Keypair;
+    });
+    const genesis = spyOn(Connection.prototype, 'getGenesisHash').mockResolvedValue(
+        'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG'
+    );
+    const latest = spyOn(Connection.prototype, 'getLatestBlockhash').mockResolvedValue({
+        blockhash,
+        lastValidBlockHeight: 100,
+    });
+    const valid = spyOn(Connection.prototype, 'isBlockhashValid').mockResolvedValue({
+        context: { slot: 1 },
+        value: true,
+    });
+    const accounts = spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockResolvedValue([null, null, null]);
+    const simulation = spyOn(Connection.prototype, 'simulateTransaction').mockResolvedValue({
+        context: { slot: 1 },
+        value: { err: null, logs: [], accounts: [null, null, null] },
+    });
+    const broadcast = spyOn(Connection.prototype, 'sendRawTransaction').mockResolvedValue('submitted');
+    const signing = spyOn(Transaction.prototype, 'partialSign');
+    const spies = [activeAccount, activeRpc, signer, genesis, latest, valid, accounts, simulation, broadcast, signing];
+    try {
+        setupBackground();
+        const sender = { id: 'paranoid', url: 'chrome-extension://paranoid/popup.html' };
+        const send = (message: unknown, from: chrome.runtime.MessageSender = sender) =>
+            new Promise<any>((resolve) => listener(message, from, resolve));
+        const request = {
+            type: 'wallet:send-sol',
+            recipient: recipient.toBase58(),
+            amount: '0.000000001',
+            publicKey: account.publicKey,
+            rpcId: rpc.id,
+        };
+        const tab = { ...sender, tab: {} as chrome.tabs.Tab };
+        const approvalSender = { ...tab, url: 'chrome-extension://paranoid/approval.html?id=test' };
+        for (const from of [
+            { ...approvalSender, id: 'other' },
+            { ...approvalSender, url: 'https://evil.example/approval.html' },
+            { ...approvalSender, url: 'chrome-extension://paranoid/approval.html.evil' },
+        ]) {
+            expect((await send({ type: 'approval:get', id: 'test' }, from)).__error).toBeString();
+        }
+        for (const from of [tab, { id: 'other', url: sender.url }, { id: sender.id, url: 'https://evil.example' }]) {
+            for (const type of ['wallet:send-sol', 'approval:get', 'approval:resolve']) {
+                expect((await send({ ...request, type, decision: 'approve' }, from)).__error).toContain(
+                    'only available from Paranoid'
+                );
+            }
+        }
+        for (const fields of [
+            { recipient: null },
+            { amount: 1 },
+            { amount: '0' },
+            { publicKey: 'stale' },
+            { rpcId: 'stale' },
+        ]) {
+            expect((await send({ ...request, ...fields })).__error).toBeString();
+        }
+        expect(signer).not.toHaveBeenCalled();
+        activeRpc.mockResolvedValue({ ...rpc, chain: null, kind: 'sign-only' });
+        expect((await send(request)).__error).toContain('Select an RPC');
+        activeRpc.mockResolvedValue(rpc);
+        genesis.mockResolvedValueOnce('wrong-cluster');
+        expect((await send(request)).__error).toContain('changed clusters');
+        for (const scenario of [
+            'cancel',
+            'save-for-later',
+            'account',
+            'rpc',
+            'url',
+            'chain',
+            'cluster',
+            'expired',
+            'signer',
+            'send-error',
+            'success',
+        ]) {
+            activeAccount.mockResolvedValue(account);
+            activeRpc.mockResolvedValue(rpc);
+            genesis.mockResolvedValue('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
+            valid.mockResolvedValue({ context: { slot: 1 }, value: true });
+            signer.mockClear();
+            signing.mockClear();
+            broadcast.mockClear();
+            const ready = new Promise<void>((resolve) => {
+                approvalReady = resolve;
+            });
+            const result = send(request);
+            pendingResult = result;
+            await Promise.race([
+                ready,
+                result.then((response) => {
+                    throw new Error(JSON.stringify(response));
+                }),
+            ]);
+            expect(simulation).toHaveBeenCalled();
+            expect(signer).not.toHaveBeenCalled();
+            expect(signing).not.toHaveBeenCalled();
+            expect((await send(request)).__error).toContain('already in progress');
+            const details = await send({ type: 'approval:get', id: approvalId }, approvalSender);
+            expect(details).toMatchObject({ title: 'Send SOL', transaction: true, canSaveForLater: false });
+            expect(details.lines).toContain(`Recipient: ${recipient.toBase58()}`);
+            expect(details.lines).toContain(`RPC: ${rpc.name}`);
+            expect(details.lines.some((line: string) => line.includes('solana:'))).toBe(false);
+            expect(details.transactionMessage).toBeString();
+            expect(
+                (await send({ type: 'approval:resolve', id: approvalId, decision: 'approve' }, tab)).__error
+            ).toBeString();
+            expect(signer).not.toHaveBeenCalled();
+            if (scenario === 'account') activeAccount.mockResolvedValue(null);
+            if (scenario === 'rpc') activeRpc.mockResolvedValue({ ...rpc, id: 'other' });
+            if (scenario === 'url') activeRpc.mockResolvedValue({ ...rpc, url: 'https://other.example' });
+            if (scenario === 'chain') activeRpc.mockResolvedValue({ ...rpc, chain: 'solana:mainnet' });
+            if (scenario === 'cluster') genesis.mockResolvedValue('other-genesis');
+            if (scenario === 'expired') valid.mockResolvedValue({ context: { slot: 1 }, value: false });
+            if (scenario === 'signer') {
+                const other = Keypair.generate();
+                secret = other.secretKey;
+                signer.mockResolvedValueOnce({ publicKey: other.publicKey, secretKey: secret } as Keypair);
+            }
+            if (scenario === 'send-error') broadcast.mockRejectedValueOnce(new Error('Preflight failed'));
+            await send(
+                {
+                    type: 'approval:resolve',
+                    id: approvalId,
+                    decision: scenario === 'cancel' || scenario === 'save-for-later' ? scenario : 'approve',
+                },
+                approvalSender
+            );
+            const response = await result;
+            pendingResult = undefined;
+            if (scenario === 'success' || scenario === 'send-error') {
+                expect(signer).toHaveBeenCalledTimes(1);
+                expect(secret.every((byte) => byte === 0)).toBe(true);
+                if (scenario === 'success') {
+                    expect(response).toEqual({ signature: 'submitted' });
+                    const [bytes, options] = broadcast.mock.calls[0]!;
+                    const transaction = Transaction.from(bytes);
+                    expect(transaction.verifySignatures()).toBe(true);
+                    expect(transaction.recentBlockhash).toBe(blockhash);
+                    expect(transactionMessageBase64(transaction)).toBe(details.transactionMessage);
+                    expect(options).toEqual({ skipPreflight: false, preflightCommitment: 'confirmed' });
+                } else expect(response.__error).toBe('Preflight failed');
+            } else {
+                expect(response.__error).toBeString();
+                if (scenario === 'signer') {
+                    expect(signer).toHaveBeenCalledTimes(1);
+                    expect(secret.every((byte) => byte === 0)).toBe(true);
+                } else expect(signer).not.toHaveBeenCalled();
+                expect(signing).not.toHaveBeenCalled();
+                expect(broadcast).not.toHaveBeenCalled();
+            }
+        }
+        simulation.mockRejectedValueOnce(new Error('Simulation failed: insufficient funds'));
+        signer.mockClear();
+        expect((await send(request)).__error).toContain('insufficient funds');
+        expect(signer).not.toHaveBeenCalled();
+        expect(latest).toHaveBeenCalledTimes(12);
+    } finally {
+        if (pendingResult) {
+            listener!(
+                { type: 'approval:resolve', id: approvalId, decision: 'cancel' },
+                { id: 'paranoid', url: 'chrome-extension://paranoid/popup.html' },
+                () => {}
+            );
+            await pendingResult;
+        }
+        for (const spy of spies) spy.mockRestore();
+        globalThis.chrome = originalChrome;
+    }
+});
 
 test('RPC explorer preference handlers require extension senders and booleans, and toggles require unlocking', async () => {
     const originalChrome = globalThis.chrome;

@@ -2,6 +2,7 @@ import {
     Connection,
     Keypair,
     PublicKey,
+    SystemProgram,
     Transaction,
     VersionedTransaction,
     type ParsedInnerInstruction,
@@ -9,6 +10,7 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
+import { validateSolRecipient, parseSolAmount } from '@/extension/send-sol';
 import type {
     ApprovalDecision,
     ApprovalDetails,
@@ -63,6 +65,7 @@ import {
 
 const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (decision: ApprovalDecision) => void }>();
 const approvalWindows = new Map<number, string>();
+let sendingSol = false;
 const MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const TESTNET_GENESIS_HASH = '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY';
@@ -88,11 +91,19 @@ export function setupBackground(): void {
         }
 
         if (message?.type === 'approval:get') {
+            if (!isApprovalPage(sender)) {
+                sendResponse({ __error: 'Approvals are only available from Paranoid' });
+                return;
+            }
             sendResponse(pendingApprovals.get(message.id)?.details || null);
             return;
         }
 
         if (message?.type === 'approval:resolve') {
+            if (!isApprovalPage(sender)) {
+                sendResponse({ __error: 'Approvals are only available from Paranoid' });
+                return;
+            }
             const pending = pendingApprovals.get(message.id);
             if (pending) {
                 pendingApprovals.delete(message.id);
@@ -108,6 +119,17 @@ export function setupBackground(): void {
             }
             sendResponse(true);
             return;
+        }
+
+        if (message?.type === 'wallet:send-sol') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            sendSol(message)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
         }
 
         if (message?.type === 'wallet:status') {
@@ -388,8 +410,85 @@ export function setupBackground(): void {
     });
 }
 
+function isApprovalPage(sender: chrome.runtime.MessageSender): boolean {
+    // Approval popup windows have a tab, unlike the toolbar popup.
+    return (
+        isExtensionPage(sender) ||
+        (sender.id === chrome.runtime.id && sender.url?.split(/[?#]/)[0] === chrome.runtime.getURL('approval.html'))
+    );
+}
+
 function isExtensionPage(sender: chrome.runtime.MessageSender): boolean {
     return sender.id === chrome.runtime.id && !sender.tab && Boolean(sender.url?.startsWith(chrome.runtime.getURL('')));
+}
+
+async function sendSol(request: {
+    recipient: unknown;
+    amount: unknown;
+    publicKey: unknown;
+    rpcId: unknown;
+}): Promise<{ signature: string }> {
+    if (sendingSol) throw new Error('A Send SOL request is already in progress');
+    sendingSol = true;
+    let signer: Keypair | null = null;
+    try {
+        const recipient = validateSolRecipient(request.recipient);
+        const lamports = parseSolAmount(request.amount);
+        const [account, activeRpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
+        if (!account || account.publicKey !== request.publicKey) {
+            throw new Error('The active account changed. Review Send SOL again');
+        }
+        if (!activeRpc.chain) throw new Error('Select an RPC to send SOL');
+        if (activeRpc.id !== request.rpcId) throw new Error('The active RPC changed. Review Send SOL again');
+        const publicKey = account.publicKey;
+        const rpc = { ...activeRpc };
+        if ((await resolveRpcChain(rpc.url)) !== rpc.chain) throw new Error('The active RPC changed clusters');
+        const connection = new Connection(rpc.url, 'confirmed');
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+        const transaction = new Transaction({
+            feePayer: new PublicKey(publicKey),
+            blockhash,
+            lastValidBlockHeight,
+        }).add(SystemProgram.transfer({ fromPubkey: new PublicKey(publicKey), toPubkey: recipient, lamports }));
+        // Simulation checks transfer funds and fees without obtaining a signer.
+        const details = await simulateTransactionDetails(connection, transaction);
+        const amount = `${lamports / 1_000_000_000n}.${(lamports % 1_000_000_000n).toString().padStart(9, '0')}`;
+        const decision = await requestApproval({
+            origin: chrome.runtime.getURL(''),
+            title: 'Send SOL',
+            lines: [
+                `Recipient: ${recipient.toBase58()}`,
+                `Amount: ${amount} SOL`,
+                `Fee payer: ${publicKey}`,
+                `RPC: ${rpc.name}`,
+            ],
+            ...details,
+            transactionMessage: transactionMessageBase64(transaction),
+            transaction: true,
+            canSaveForLater: false,
+        });
+        if (decision !== 'approve') throw new Error('User cancelled the request');
+        if ((await resolveRpcChain(rpc.url)) !== rpc.chain) throw new Error('The active RPC changed clusters');
+        if (!(await connection.isBlockhashValid(blockhash, { commitment: 'confirmed' })).value) {
+            throw new Error('Send SOL transaction expired. Review and approve a new request');
+        }
+        const [currentAccount, currentRpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+        if (currentAccount?.publicKey !== publicKey) throw new Error('The active account changed before signing');
+        if (currentRpc?.id !== rpc.id || currentRpc.url !== rpc.url || currentRpc.chain !== rpc.chain) {
+            throw new Error('The active RPC changed before signing');
+        }
+        signer = await getKeypair();
+        if (signer.publicKey.toBase58() !== publicKey) throw new Error('The active account changed before signing');
+        transaction.partialSign(signer);
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+        });
+        return { signature };
+    } finally {
+        signer?.secretKey.fill(0);
+        sendingSol = false;
+    }
 }
 
 async function handleProviderRequest(request: ProviderRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {

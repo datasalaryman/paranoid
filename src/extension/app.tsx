@@ -21,11 +21,13 @@ import {
     useNavigate,
 } from '@tanstack/react-router';
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { BackButton, useBackNavigation } from '@/extension/components/back-button';
 import { TransactionInformation } from '@/extension/components/transaction-information';
 import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
 import { SignOnlyExplorerLinks } from '@/extension/components/sign-only-explorer-links';
 import { showToast, ToastNotification } from '@/extension/components/toast';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
+import { parseSolAmount, validateSolRecipient } from '@/extension/send-sol';
 import type {
     ActiveRpcSummary,
     ApprovalDecision,
@@ -158,6 +160,12 @@ const approvalRoute = createRoute({
     component: ApprovalPage,
 });
 
+const sendSolRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/send-sol',
+    component: SendSolPage,
+});
+
 const savedTransactionsRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/saved-transactions',
@@ -195,6 +203,7 @@ const routeTree = rootRoute.addChildren([
     customRpcRoute,
     rpcSettingsRoute,
     approvalRoute,
+    sendSolRoute,
     savedTransactionsRoute,
     savedTransactionRoute,
     transactionHistoryRoute,
@@ -542,12 +551,7 @@ function RenameKeypairPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / KEYPAIR SETTINGS">
-            <button
-                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
-                onClick={() => navigate({ to: '/wallet' })}
-            >
-                &lt; Back
-            </button>
+            <BackButton fallback="/wallet" />
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Keypair settings</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
                 Choose a label that makes this keypair easy to identify.
@@ -868,12 +872,7 @@ function RpcSettingsPage() {
         explorerMainnet === (rpc.data?.explorerMainnet ?? false);
     return (
         <WalletFrame eyebrow="PARANOID / RPC SETTINGS">
-            <button
-                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
-                onClick={() => navigate({ to: '/wallet' })}
-            >
-                &lt; Back
-            </button>
+            <BackButton fallback="/wallet" />
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Custom RPC settings</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
                 Update the label or endpoint. Paranoid verifies the endpoint's Solana cluster before saving it.
@@ -1065,8 +1064,145 @@ function PopupPage() {
     );
 }
 
+function SendSolPage() {
+    const queryClient = useQueryClient();
+    const [recipient, setRecipient] = useState('');
+    const [amount, setAmount] = useState('');
+    const [errors, setErrors] = useState<{ recipient?: string; amount?: string }>({});
+    const status = useQuery({
+        queryKey: ['wallet-status'],
+        queryFn: () => sendMessage<WalletStatus>({ type: 'wallet:status' }),
+    });
+    const active = status.data?.active;
+    const rpc = status.data?.activeRpc;
+    const savedTransactions = useSavedTransactions(active?.publicKey, rpc?.id);
+    const send = useMutation({
+        mutationFn: () =>
+            sendMessage<{ signature: string }>({
+                type: 'wallet:send-sol',
+                recipient: recipient.trim(),
+                amount: amount.trim(),
+                publicKey: active?.publicKey,
+                rpcId: rpc?.id,
+            }),
+        onSuccess: () => {
+            setAmount('');
+            showToast('Transaction submitted', 'success');
+            void queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+            void queryClient.invalidateQueries({ queryKey: ['transaction-history'] });
+        },
+    });
+    const submit = (event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (send.isPending) return;
+        const nextErrors: typeof errors = {};
+        try {
+            validateSolRecipient(recipient);
+        } catch (error) {
+            nextErrors.recipient = errorMessage(error);
+        }
+        try {
+            parseSolAmount(amount);
+        } catch (error) {
+            nextErrors.amount = errorMessage(error);
+        }
+        setErrors(nextErrors);
+        if (!nextErrors.recipient && !nextErrors.amount) send.mutate();
+    };
+
+    if (rpc?.kind === 'sign-only') return <Navigate to="/wallet" replace />;
+
+    return (
+        <WalletFrame
+            eyebrow="PARANOID / SEND SOL"
+            bottomNav={
+                <TransactionNavigation active="send" savedTransactionCount={savedTransactions.data?.length ?? 0} />
+            }
+        >
+            <BackButton fallback="/wallet" />
+            <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Send SOL</h1>
+            <p className={panelClassName}>
+                From: <span className="break-all font-mono text-xs">{active?.publicKey ?? 'Loading...'}</span>
+                <span className="mt-2 block text-xs text-[#b7c8ba]">
+                    RPC: {rpc?.name}
+                </span>
+                <span className="mt-2 block text-xs">Balance: {formatBalance(status.data?.balance)}</span>
+            </p>
+            <form onSubmit={submit} noValidate className="grid gap-3">
+                <label htmlFor="sol-recipient" className={labelClassName}>
+                    Solana Address
+                </label>
+                <input
+                    id="sol-recipient"
+                    className={inputClassName}
+                    value={recipient}
+                    disabled={send.isPending}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(errors.recipient)}
+                    aria-describedby={errors.recipient ? 'sol-recipient-error' : undefined}
+                    onChange={(event) => {
+                        setRecipient(event.target.value);
+                        setErrors({ ...errors, recipient: undefined });
+                        send.reset();
+                    }}
+                />
+                {errors.recipient && (
+                    <p id="sol-recipient-error" role="alert" className={errorClassName}>
+                        {errors.recipient}
+                    </p>
+                )}
+                <label htmlFor="sol-amount" className={labelClassName}>
+                    Amount in SOL
+                </label>
+                <input
+                    id="sol-amount"
+                    className={inputClassName}
+                    value={amount}
+                    disabled={send.isPending}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    placeholder="0.00"
+                    aria-invalid={Boolean(errors.amount)}
+                    aria-describedby="sol-amount-help sol-amount-error"
+                    onChange={(event) => {
+                        setAmount(event.target.value);
+                        setErrors({ ...errors, amount: undefined });
+                        send.reset();
+                    }}
+                />
+                <p id="sol-amount-help" className="m-0 text-xs text-[#b7c8ba]">
+                    Up to 9 decimal places. Leave enough SOL for the network fee.
+                </p>
+                {errors.amount && (
+                    <p id="sol-amount-error" role="alert" className={errorClassName}>
+                        {errors.amount}
+                    </p>
+                )}
+                <p className={warningClassName}>
+                    Review balance changes and instructions in the approval window before signing.
+                </p>
+                <button className={buttonClassName} disabled={send.isPending || !active || !rpc?.chain} type="submit">
+                    {send.isPending ? 'Waiting for approval and submission...' : 'Send'}
+                </button>
+            </form>
+            {(status.isError || send.isError) && (
+                <p role="alert" className={errorClassName}>
+                    {errorMessage(status.error ?? send.error)}
+                </p>
+            )}
+            {send.data && (
+                <div role="status" className={panelClassName}>
+                    <p className="mt-0">Transaction submitted. Confirmation is pending.</p>
+                    <span className="break-all font-mono text-xs">{send.data.signature}</span>
+                    <SolanaIdentifierActions value={send.data.signature} kind="signature" rpc={rpc} />
+                </div>
+            )}
+        </WalletFrame>
+    );
+}
+
 function TransactionHistoryPageView() {
-    const navigate = useNavigate();
     const loadMoreRef = useRef<HTMLDivElement>(null);
     const status = useQuery({
         queryKey: ['wallet-status'],
@@ -1104,12 +1240,7 @@ function TransactionHistoryPageView() {
                 <TransactionNavigation active="history" savedTransactionCount={savedTransactions.data?.length ?? 0} />
             }
         >
-            <button
-                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
-                onClick={() => navigate({ to: '/wallet' })}
-            >
-                &lt; Account
-            </button>
+            <BackButton fallback="/wallet" />
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Transaction History</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
                 Recent transactions that included{' '}
@@ -1184,12 +1315,7 @@ function TransactionHistoryDetailsPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / TRANSACTION">
-            <Link
-                className="mb-4 inline-block text-xs text-[#b7c8ba] no-underline hover:text-[#e7f7e9]"
-                to="/transaction-history"
-            >
-                &lt; Transaction History
-            </Link>
+            <BackButton fallback="/transaction-history" />
             <TransactionInformation
                 title={details.isPending ? 'Loading transaction...' : truncateSignature(signature)}
                 titleActions={<SolanaIdentifierActions value={signature} kind="signature" rpc={rpc} />}
@@ -1227,12 +1353,7 @@ function SavedTransactionsPage() {
                 />
             }
         >
-            <button
-                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
-                onClick={() => navigate({ to: '/wallet' })}
-            >
-                &lt; Account
-            </button>
+            <BackButton fallback="/wallet" />
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Saved Transactions</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">Saved transactions for this keypair and RPC.</p>
             {(status.isError || savedTransactions.isError) && (
@@ -1389,7 +1510,7 @@ function SavedTransactionItem({
 
 function SavedTransactionPage() {
     const { transactionId } = savedTransactionRoute.useParams();
-    const navigate = useNavigate();
+    const goBack = useBackNavigation('/saved-transactions');
     const queryClient = useQueryClient();
     const status = useQuery({
         queryKey: ['wallet-status'],
@@ -1411,7 +1532,7 @@ function SavedTransactionPage() {
             if (value === 'refresh-blockhash') showToast('Transaction blockhash refreshed.', 'success');
             if (value === 'remove') showToast('Saved transaction removed.', 'success');
             await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
-            await navigate({ to: '/saved-transactions' });
+            goBack();
         },
         onError: (error, value) => {
             if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
@@ -1424,12 +1545,7 @@ function SavedTransactionPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
-            <Link
-                className="mb-4 inline-block text-xs text-[#b7c8ba] no-underline hover:text-[#e7f7e9]"
-                to="/saved-transactions"
-            >
-                &lt; Saved Transactions
-            </Link>
+            <BackButton fallback="/saved-transactions" disabled={decision.isPending} />
             {request.isError && <p className={errorClassName}>{errorMessage(request.error)}</p>}
             <TransactionInformation
                 title={transaction?.title ?? (request.isPending ? 'Loading transaction...' : 'Transaction unavailable')}
@@ -1450,7 +1566,7 @@ function SavedTransactionPage() {
                 <button
                     className={secondaryButtonClassName}
                     disabled={!transaction || decision.isPending}
-                    onClick={() => navigate({ to: '/saved-transactions' })}
+                    onClick={goBack}
                 >
                     Cancel
                 </button>
@@ -1504,12 +1620,18 @@ function TransactionNavigation({
     active,
     savedTransactionCount,
 }: {
-    active?: 'saved-transactions' | 'history';
+    active?: 'saved-transactions' | 'history' | 'send';
     savedTransactionCount: number;
 }) {
     const navigate = useNavigate();
     return (
-        <nav className="sticky bottom-0 grid grid-cols-2 divide-x divide-[#36433a] border-t border-[#36433a] bg-[#151a17]">
+        <nav className="sticky bottom-0 grid grid-cols-3 divide-x divide-[#36433a] border-t border-[#36433a] bg-[#151a17]">
+            <TransactionNavButton
+                label="Send SOL"
+                value="Transfer"
+                active={active === 'send'}
+                onClick={() => navigate({ to: '/send-sol' })}
+            />
             <TransactionNavButton
                 label="Saved Transactions"
                 value={`${savedTransactionCount} saved`}
@@ -1544,7 +1666,7 @@ function TransactionNavButton({
             }`}
             type="button"
             aria-current={active ? 'page' : undefined}
-            onClick={onClick}
+            onClick={active ? undefined : onClick}
         >
             <span className="block text-[10px] tracking-[0.1em] text-[#68f58a] uppercase">{label}</span>
             <span className="mt-1 block truncate text-xs font-semibold">{value}</span>
@@ -1917,14 +2039,14 @@ function ApprovalPage() {
         queryKey: ['approval', id],
         enabled: Boolean(id),
         queryFn: async () => {
-            const details = (await chrome.runtime.sendMessage({ type: 'approval:get', id })) as ApprovalDetails | null;
+            const details = await sendMessage<ApprovalDetails | null>({ type: 'approval:get', id });
             if (!details) throw new Error('This request expired');
             return details;
         },
     });
     const decision = useMutation({
         mutationFn: (value: ApprovalDecision) =>
-            chrome.runtime.sendMessage({ type: 'approval:resolve', id, decision: value }),
+            sendMessage<boolean>({ type: 'approval:resolve', id, decision: value }),
         onSuccess: () => window.close(),
     });
 
@@ -1933,6 +2055,13 @@ function ApprovalPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
+            {request.data?.lines?.length ? (
+                <div className={`${panelClassName} break-words text-xs leading-relaxed`}>
+                    {request.data.lines.map((line, index) => (
+                        <p key={index}>{line}</p>
+                    ))}
+                </div>
+            ) : null}
             <TransactionInformation
                 title={request.data?.title ?? 'Loading request...'}
                 origin={request.data?.origin}
