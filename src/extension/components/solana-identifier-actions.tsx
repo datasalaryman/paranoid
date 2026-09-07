@@ -9,11 +9,14 @@ export interface SolanaIdentifierActionsProps {
 }
 
 export function SolanaIdentifierActions({ value, kind = 'address', rpc }: SolanaIdentifierActionsProps) {
-    const customRpcUrl = rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
-    const explorerUrl = rpc?.chain
+    const explorerMainnet = rpc?.kind === 'custom' && rpc.explorerMainnet;
+    const chain = explorerMainnet ? 'solana:mainnet' : rpc?.chain;
+    const customRpcUrl =
+        !explorerMainnet && rpc && (rpc.kind === 'custom' || rpc.kind === 'localnet') ? rpc.url : undefined;
+    const explorerUrl = chain
         ? (kind === 'address' ? getSolanaExplorerAccountUrl : getSolanaExplorerTransactionUrl)(
               value,
-              rpc.chain,
+              chain,
               customRpcUrl
           )
         : undefined;

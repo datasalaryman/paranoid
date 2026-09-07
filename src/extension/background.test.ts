@@ -12,10 +12,52 @@ import {
     buildInstructionTree,
     calculateSolBalanceChanges,
     replaceRecentBlockhash,
+    setupBackground,
     transactionMessageBase64,
     validateRequestedChain,
 } from './background';
 import type { ProviderRequest } from './messages';
+
+test('RPC explorer preference handlers require extension senders and booleans, and toggles require unlocking', async () => {
+    const originalChrome = globalThis.chrome;
+    let listener: Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+    globalThis.chrome = {
+        windows: { onRemoved: { addListener() {} } },
+        runtime: {
+            id: 'paranoid',
+            getURL: (path: string) => `chrome-extension://paranoid/${path}`,
+            onMessage: {
+                addListener(value: typeof listener) {
+                    listener = value;
+                },
+            },
+        },
+    } as unknown as typeof chrome;
+    try {
+        setupBackground();
+        const sender = { id: 'paranoid', url: 'chrome-extension://paranoid/popup.html' };
+        const send = (message: unknown, from: chrome.runtime.MessageSender = sender) =>
+            new Promise<unknown>((resolve) => listener(message, from, resolve));
+        for (const type of ['wallet:update-rpc', 'wallet:set-rpc-explorer-mainnet']) {
+            expect(await send({ type, explorerMainnet: true }, { ...sender, tab: {} as chrome.tabs.Tab })).toEqual({
+                __error: 'Wallet management is only available from Paranoid',
+            });
+            for (const explorerMainnet of [undefined, null, 'false', 0, 1, {}]) {
+                expect(await send({ type, explorerMainnet })).toEqual({
+                    __error: 'Explorer mainnet preference must be a boolean',
+                });
+            }
+        }
+        for (const explorerMainnet of [false, true]) {
+            // No URL is supplied: preference-only changes must not try to resolve an RPC chain.
+            expect(await send({ type: 'wallet:set-rpc-explorer-mainnet', id: 'custom', explorerMainnet })).toEqual({
+                __error: 'Wallet is locked. Open Paranoid to unlock it',
+            });
+        }
+    } finally {
+        globalThis.chrome = originalChrome;
+    }
+});
 
 describe('validateRequestedChain', () => {
     const request = (method: ProviderRequest['method'], chain?: string): ProviderRequest => ({

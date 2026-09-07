@@ -36,6 +36,7 @@ import {
     renameKeypair,
     selectKeypair,
     selectRpc,
+    setRpcExplorerMainnet,
     setupVault,
     unlockVault,
     updateRpc,
@@ -247,8 +248,27 @@ export function setupBackground(): void {
                 sendResponse({ __error: 'Wallet management is only available from Paranoid' });
                 return;
             }
+            if (typeof message.explorerMainnet !== 'boolean') {
+                sendResponse({ __error: 'Explorer mainnet preference must be a boolean' });
+                return;
+            }
             resolveRpcChain(message.url)
-                .then((chain) => updateRpc(message.id, message.label, message.url, chain))
+                .then((chain) => updateRpc(message.id, message.label, message.url, chain, message.explorerMainnet))
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'wallet:set-rpc-explorer-mainnet') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Wallet management is only available from Paranoid' });
+                return;
+            }
+            if (typeof message.explorerMainnet !== 'boolean') {
+                sendResponse({ __error: 'Explorer mainnet preference must be a boolean' });
+                return;
+            }
+            setRpcExplorerMainnet(message.id, message.explorerMainnet)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -516,6 +536,7 @@ async function getWalletStatus() {
                 name: activeRpc.name,
                 kind: activeRpc.kind,
                 chain: activeRpc.chain,
+                explorerMainnet: activeRpc.explorerMainnet,
                 url: activeRpc.url,
             },
             rpcs,
@@ -534,6 +555,7 @@ async function getWalletStatus() {
             name: activeRpc.name,
             kind: activeRpc.kind,
             chain: activeRpc.chain,
+            explorerMainnet: activeRpc.explorerMainnet,
             url: activeRpc.url,
         },
         rpcs,

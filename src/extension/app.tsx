@@ -697,14 +697,33 @@ function CustomRpcPage() {
     const queryClient = useQueryClient();
     const [url, setUrl] = useState('');
     const [localError, setLocalError] = useState('');
+    const [addedRpc, setAddedRpc] = useState<RpcSummary | null>(null);
+    const explorerDialog = useRef<HTMLDialogElement>(null);
     const addRpc = useMutation({
         mutationFn: (value: string) => sendMessage<RpcSummary>({ type: 'wallet:add-rpc', url: value }),
-        onSuccess: async () => {
+        onSuccess: (rpc) => {
             setUrl('');
+            setAddedRpc(rpc);
+        },
+    });
+    const saveExplorerPreference = useMutation({
+        mutationFn: (explorerMainnet: boolean) => {
+            if (!addedRpc) throw new Error('Custom RPC not found');
+            return sendMessage<boolean>({
+                type: 'wallet:set-rpc-explorer-mainnet',
+                id: addedRpc.id,
+                explorerMainnet,
+            });
+        },
+        onSuccess: async () => {
             await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
             await navigate({ to: '/wallet' });
         },
     });
+
+    useEffect(() => {
+        if (addedRpc) explorerDialog.current?.showModal();
+    }, [addedRpc]);
 
     return (
         <WalletFrame eyebrow="PARANOID / ADD RPC">
@@ -753,12 +772,49 @@ function CustomRpcPage() {
                 )}
                 <button
                     className={`${buttonClassName} mt-4 w-full`}
-                    disabled={!url.trim() || addRpc.isPending}
+                    disabled={!url.trim() || addRpc.isPending || !!addedRpc}
                     type="submit"
                 >
                     Add RPC
                 </button>
             </form>
+            <dialog
+                ref={explorerDialog}
+                aria-labelledby="rpc-explorer-title"
+                aria-describedby="rpc-explorer-description"
+                onCancel={(event) => event.preventDefault()}
+                className="m-auto w-[calc(100%-32px)] max-w-sm rounded-[6px] border border-[#36433a] bg-[#151a17] p-5 text-[#e7f7e9] backdrop:bg-black/70"
+            >
+                <h2 id="rpc-explorer-title" className="mt-0 text-lg font-bold">
+                    Open explorer links on mainnet?
+                </h2>
+                <p id="rpc-explorer-description" className="text-sm leading-normal text-[#b7c8ba]">
+                    Custom RPC added. Use mainnet for this RPC's explorer links instead of including your RPC URL? This
+                    does not change where wallet requests are sent. You can change this in RPC settings.
+                </p>
+                {saveExplorerPreference.isError && (
+                    <p className={errorClassName}>{errorMessage(saveExplorerPreference.error)}</p>
+                )}
+                <div className="mt-4 grid grid-cols-2 gap-2.5">
+                    <button
+                        type="button"
+                        className={buttonClassName}
+                        autoFocus
+                        disabled={saveExplorerPreference.isPending}
+                        onClick={() => saveExplorerPreference.mutate(true)}
+                    >
+                        Yes
+                    </button>
+                    <button
+                        type="button"
+                        className={secondaryButtonClassName}
+                        disabled={saveExplorerPreference.isPending}
+                        onClick={() => saveExplorerPreference.mutate(false)}
+                    >
+                        No
+                    </button>
+                </div>
+            </dialog>
         </WalletFrame>
     );
 }
@@ -773,11 +829,12 @@ function RpcSettingsPage() {
     });
     const [label, setLabel] = useState('');
     const [url, setUrl] = useState('');
+    const [explorerMainnet, setExplorerMainnet] = useState(false);
     const [localError, setLocalError] = useState('');
     const [confirmingRemoval, setConfirmingRemoval] = useState(false);
     const update = useMutation({
-        mutationFn: ({ label, url }: { label: string; url: string }) =>
-            sendMessage<boolean>({ type: 'wallet:update-rpc', id: rpcId, label, url }),
+        mutationFn: ({ label, url, explorerMainnet }: { label: string; url: string; explorerMainnet: boolean }) =>
+            sendMessage<boolean>({ type: 'wallet:update-rpc', id: rpcId, label, url, explorerMainnet }),
         onSuccess: async () => {
             await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
             queryClient.removeQueries({ queryKey: ['rpc', rpcId] });
@@ -800,11 +857,15 @@ function RpcSettingsPage() {
         if (!rpc.data) return;
         setLabel(rpc.data.name);
         setUrl(rpc.data.url);
+        setExplorerMainnet(rpc.data.explorerMainnet ?? false);
     }, [rpc.data]);
 
     if (rpc.isError) return <ErrorView message={errorMessage(rpc.error)} />;
 
-    const unchanged = label.trim() === rpc.data?.name && url.trim() === rpc.data?.url;
+    const unchanged =
+        label.trim() === rpc.data?.name &&
+        url.trim() === rpc.data?.url &&
+        explorerMainnet === (rpc.data?.explorerMainnet ?? false);
     return (
         <WalletFrame eyebrow="PARANOID / RPC SETTINGS">
             <button
@@ -825,7 +886,7 @@ function RpcSettingsPage() {
                         const normalized = normalizeRpcUrl(url);
                         const granted = await chrome.permissions.contains({ origins: customRpcOrigins });
                         if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
-                        update.mutate({ label, url: normalized });
+                        update.mutate({ label, url: normalized, explorerMainnet });
                     } catch (error) {
                         setLocalError(errorMessage(error));
                     }
@@ -856,6 +917,20 @@ function RpcSettingsPage() {
                         setLocalError('');
                     }}
                 />
+                <label className="mt-5 flex cursor-pointer items-center justify-between gap-3 text-sm">
+                    Open explorer links on mainnet
+                    <input
+                        type="checkbox"
+                        role="switch"
+                        checked={explorerMainnet}
+                        onChange={(event) => setExplorerMainnet(event.target.checked)}
+                        className="relative h-6 w-10 shrink-0 cursor-pointer appearance-none rounded-full border border-[#36433a] bg-[#202722] before:absolute before:top-0.5 before:left-0.5 before:size-4 before:rounded-full before:bg-[#b7c8ba] before:transition-transform checked:bg-[#68f58a] checked:before:translate-x-4 checked:before:bg-[#081009] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#68f58a]"
+                    />
+                </label>
+                <p className="text-xs leading-normal text-[#b7c8ba]">
+                    When enabled, explorer links use mainnet without including your RPC URL. Wallet requests still use
+                    this endpoint.
+                </p>
                 {(localError || update.isError) && (
                     <p className={errorClassName}>{localError || errorMessage(update.error)}</p>
                 )}
@@ -922,8 +997,10 @@ function PopupPage() {
         active && activeRpc?.chain
             ? getSolanaExplorerAccountTokensUrl(
                   active.publicKey,
-                  activeRpc.chain,
-                  activeRpc.kind === 'custom' || activeRpc.kind === 'localnet' ? activeRpc.url : undefined
+                  activeRpc.kind === 'custom' && activeRpc.explorerMainnet ? 'solana:mainnet' : activeRpc.chain,
+                  (activeRpc.kind === 'custom' && !activeRpc.explorerMainnet) || activeRpc.kind === 'localnet'
+                      ? activeRpc.url
+                      : undefined
               )
             : undefined;
     return (

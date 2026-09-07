@@ -15,6 +15,7 @@ export interface RpcSummary {
     name: string;
     kind: 'localnet' | 'devnet' | 'testnet' | 'custom' | 'sign-only';
     chain: SolanaChain | null;
+    explorerMainnet?: boolean;
 }
 
 interface StoredRpc {
@@ -22,6 +23,7 @@ interface StoredRpc {
     name: string;
     chain: SolanaChain;
     encryptedUrl: EncryptedValue;
+    explorerMainnet?: boolean;
     createdAt: number;
 }
 
@@ -349,7 +351,13 @@ export async function listRpcs(): Promise<RpcSummary[]> {
     const custom = await readAllRpcs();
     return [
         ...BUILT_IN_RPCS.map(({ id, name, kind, chain }) => ({ id, name, kind, chain })),
-        ...custom.map(({ id, name, chain }) => ({ id, name, kind: 'custom' as const, chain })),
+        ...custom.map(({ id, name, chain, explorerMainnet = false }) => ({
+            id,
+            name,
+            kind: 'custom' as const,
+            chain,
+            explorerMainnet,
+        })),
     ];
 }
 
@@ -365,6 +373,7 @@ export async function addRpc(value: string, chain: SolanaChain): Promise<RpcSumm
     try {
         stored = {
             ...metadata,
+            explorerMainnet: true,
             encryptedUrl: await encrypt(key, plaintext, rpcAdditionalData(metadata)),
             createdAt: Date.now(),
         };
@@ -378,7 +387,7 @@ export async function addRpc(value: string, chain: SolanaChain): Promise<RpcSumm
     transaction.objectStore(SETTINGS_STORE).put({ key: ACTIVE_RPC_KEY, value: stored.id });
     await transactionDone(transaction);
     database.close();
-    return { id, name, kind: 'custom', chain };
+    return { id, name, kind: 'custom', chain, explorerMainnet: true };
 }
 
 export async function getRpc(id: string): Promise<ActiveRpc> {
@@ -394,6 +403,7 @@ export async function getRpc(id: string): Promise<ActiveRpc> {
             name: stored.name,
             kind: 'custom',
             chain: stored.chain,
+            explorerMainnet: stored.explorerMainnet ?? false,
             url: new TextDecoder().decode(plaintext),
         };
     } finally {
@@ -401,8 +411,15 @@ export async function getRpc(id: string): Promise<ActiveRpc> {
     }
 }
 
-export async function updateRpc(id: string, value: string, urlValue: string, chain: SolanaChain): Promise<void> {
+export async function updateRpc(
+    id: string,
+    value: string,
+    urlValue: string,
+    chain: SolanaChain,
+    explorerMainnet: boolean
+): Promise<void> {
     const key = requireUnlockedVault();
+    if (typeof explorerMainnet !== 'boolean') throw new Error('Explorer mainnet preference must be a boolean');
     const name = value.trim();
     if (!name) throw new Error('Enter an RPC label');
     if (name.length > 40) throw new Error('RPC labels must be 40 characters or fewer');
@@ -426,7 +443,23 @@ export async function updateRpc(id: string, value: string, urlValue: string, cha
     }
 
     const transaction = database.transaction(RPC_STORE, 'readwrite');
-    transaction.objectStore(RPC_STORE).put({ ...stored, ...metadata, encryptedUrl });
+    transaction.objectStore(RPC_STORE).put({ ...stored, ...metadata, encryptedUrl, explorerMainnet });
+    await transactionDone(transaction);
+    database.close();
+}
+
+export async function setRpcExplorerMainnet(id: string, enabled: boolean): Promise<void> {
+    requireUnlockedVault();
+    if (typeof enabled !== 'boolean') throw new Error('Explorer mainnet preference must be a boolean');
+    const database = await openDatabase();
+    const transaction = database.transaction(RPC_STORE, 'readwrite');
+    const store = transaction.objectStore(RPC_STORE);
+    const stored = await request<StoredRpc | undefined>(store.get(id));
+    if (!stored) {
+        database.close();
+        throw new Error('Custom RPC not found');
+    }
+    store.put({ ...stored, explorerMainnet: enabled });
     await transactionDone(transaction);
     database.close();
 }
@@ -501,6 +534,7 @@ export async function getActiveRpc(): Promise<ActiveRpc | null> {
             name: stored.name,
             kind: 'custom',
             chain: stored.chain,
+            explorerMainnet: stored.explorerMainnet ?? false,
             url: new TextDecoder().decode(plaintext),
         };
     } finally {

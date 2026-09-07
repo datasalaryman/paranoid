@@ -60,6 +60,59 @@ test('identifier actions put accessible copy before Explorer and omit links with
     }
 });
 
+test('custom RPC mainnet preference excludes the endpoint for addresses and signatures', () => {
+    for (const explorerMainnet of [undefined, false, true]) {
+        for (const chain of ['solana:mainnet', 'solana:devnet', 'solana:testnet', 'solana:localnet'] as const) {
+            for (const kind of ['address', 'signature'] as const) {
+                const markup = renderToStaticMarkup(
+                    <SolanaIdentifierActions
+                        value="full-value"
+                        kind={kind}
+                        rpc={{
+                            id: 'custom',
+                            name: 'Custom',
+                            kind: 'custom',
+                            chain,
+                            url: 'https://private.example/?api-key=secret',
+                            explorerMainnet,
+                        }}
+                    />
+                );
+                const path = kind === 'address' ? 'address' : 'tx';
+                if (explorerMainnet) {
+                    expect(markup).toContain(`href="https://explorer.solana.com/${path}/full-value"`);
+                    expect(markup).not.toContain('cluster=');
+                    expect(markup).not.toContain('customUrl=');
+                    expect(markup).not.toContain('secret');
+                } else {
+                    expect(markup).toContain(`/${path}/full-value?cluster=custom`);
+                    expect(markup).toContain('customUrl=https%3A%2F%2Fprivate.example%2F%3Fapi-key%3Dsecret');
+                }
+            }
+        }
+    }
+});
+
+test('mainnet preference does not override built-in RPCs or Sign Only', () => {
+    for (const kind of ['devnet', 'testnet', 'localnet', 'sign-only'] as const) {
+        const markup = renderToStaticMarkup(
+            <SolanaIdentifierActions
+                value="full-value"
+                rpc={{
+                    id: kind,
+                    name: kind,
+                    kind,
+                    chain: kind === 'sign-only' ? null : `solana:${kind}`,
+                    url: kind === 'sign-only' ? '' : 'http://localhost:8899',
+                    explorerMainnet: true,
+                }}
+            />
+        );
+        if (kind === 'sign-only') expect(markup).not.toContain('<a ');
+        else expect(markup).toContain(`cluster=${kind === 'localnet' ? 'custom' : kind}`);
+    }
+});
+
 test('recursive instruction actions include named programs and remain outside expand buttons', () => {
     const programIds = [
         '11111111111111111111111111111111',

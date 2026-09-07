@@ -84,6 +84,7 @@ export interface RpcSummary {
     name: string;
     kind: 'localnet' | 'devnet' | 'testnet' | 'custom' | 'sign-only';
     chain: SolanaChain | null;
+    explorerMainnet?: boolean;
 }
 
 export interface ActiveRpcSummary extends RpcSummary {
