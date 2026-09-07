@@ -43,6 +43,8 @@ import {
 } from '@/extension/keypairs';
 import {
     claimSavedTransaction,
+    completeSavedTransaction,
+    setSavedTransactionPinned,
     saveTransaction,
     listSavedTransactions,
     moveSavedTransactionToTop,
@@ -357,6 +359,17 @@ export function setupBackground(): void {
                 return;
             }
             refreshActiveSavedTransactionBlockhash(message.id)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
+        if (message?.type === 'saved-transactions:set-pinned') {
+            if (!isExtensionPage(sender)) {
+                sendResponse({ __error: 'Saved transactions are only available from Paranoid' });
+                return;
+            }
+            setActiveSavedTransactionPinned(message.id, message.pinned)
                 .then(() => sendResponse(true))
                 .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
             return true;
@@ -932,6 +945,7 @@ function toSavedTransactionSummary(
         method,
         createdAt,
         expiredBlockhash,
+        pinned: Boolean(transaction.pinned),
         balanceChanges,
         instructionTree,
         transactionMessage: transactionMessageBase64(deserialized),
@@ -942,6 +956,13 @@ async function moveActiveSavedTransactionToTop(id: string): Promise<void> {
     const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
     if (!keypair || !rpc?.chain) throw new Error('Select a keypair and RPC first');
     await moveSavedTransactionToTop(keypair.publicKey, rpc.id, id);
+}
+
+async function setActiveSavedTransactionPinned(id: string, pinned: boolean): Promise<void> {
+    if (typeof pinned !== 'boolean') throw new Error('Invalid pin state');
+    const [keypair, rpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
+    if (!keypair || !rpc?.chain) throw new Error('Select a keypair and RPC first');
+    await setSavedTransactionPinned(keypair.publicKey, rpc.id, id, pinned);
 }
 
 async function removeActiveSavedTransaction(id: string): Promise<void> {
@@ -1004,7 +1025,7 @@ async function signSavedTransaction(id: string): Promise<{ signature?: string }>
             if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
             signature = await connection.sendRawTransaction(serialize(transaction), savedTransaction.options);
         }
-        await removeSavedTransaction(storedKeypair.publicKey, rpc.id, id);
+        await completeSavedTransaction(storedKeypair.publicKey, rpc.id, id);
         return signature ? { signature } : {};
     } catch (error) {
         await releaseSavedTransaction(storedKeypair.publicKey, rpc.id, id).catch(() => undefined);

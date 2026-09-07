@@ -15,6 +15,7 @@ export interface SavedTransaction {
     options?: SendOptions;
     createdAt: number;
     processingAt?: number;
+    pinned?: boolean;
 }
 
 interface StoredSavedTransactions {
@@ -35,7 +36,7 @@ export async function listSavedTransactions(publicKey: string, rpcId: string): P
             .get(scope(publicKey, rpcId))
     );
     database.close();
-    return stored?.transactions ?? [];
+    return (stored?.transactions ?? []).sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 }
 
 export async function saveTransaction(
@@ -77,6 +78,29 @@ export async function claimSavedTransaction(publicKey: string, rpcId: string, id
     await transactionDone(transaction);
     database.close();
     return claimed;
+}
+
+export async function setSavedTransactionPinned(
+    publicKey: string,
+    rpcId: string,
+    id: string,
+    pinned: boolean
+): Promise<void> {
+    await updateSavedTransactions(publicKey, rpcId, (transactions) => {
+        if (!transactions.some((transaction) => transaction.id === id)) throw new Error('Saved transaction not found');
+        return transactions.map((transaction) => (transaction.id === id ? { ...transaction, pinned } : transaction));
+    });
+}
+
+export async function completeSavedTransaction(publicKey: string, rpcId: string, id: string): Promise<void> {
+    await updateSavedTransactions(publicKey, rpcId, (transactions) =>
+        transactions.flatMap((transaction) => {
+            if (transaction.id !== id) return [transaction];
+            if (!transaction.pinned) return [];
+            const { processingAt: _, ...saved } = transaction;
+            return [saved];
+        })
+    );
 }
 
 export async function releaseSavedTransaction(publicKey: string, rpcId: string, id: string): Promise<void> {

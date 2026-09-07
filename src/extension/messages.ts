@@ -37,6 +37,7 @@ export interface SavedTransactionSummary {
     method: 'signTransaction' | 'signAndSendTransaction';
     createdAt: number;
     expiredBlockhash: boolean;
+    pinned?: boolean;
     simulationError?: string;
     balanceChanges?: SolBalanceChange[];
     instructionTree?: InstructionTreeNode[];

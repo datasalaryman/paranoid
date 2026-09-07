@@ -1280,6 +1280,17 @@ function SavedTransactionItem({
     const [expanded, setExpanded] = useState(false);
     const actionsId = useId();
     const queryClient = useQueryClient();
+    const pin = useMutation({
+        mutationFn: () =>
+            sendMessage<boolean>({
+                type: 'saved-transactions:set-pinned',
+                id: transaction.id,
+                pinned: !transaction.pinned,
+            }),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
+        },
+    });
     const decision = useMutation({
         mutationFn: (value: 'refresh-blockhash' | 'remove') =>
             sendMessage<boolean>({ type: `saved-transactions:${value}`, id: transaction.id }),
@@ -1293,9 +1304,33 @@ function SavedTransactionItem({
     });
 
     return (
-        <div className="min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] text-[#e7f7e9]">
+        <div className="relative min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] text-[#e7f7e9]">
             <button
-                className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-[14px] text-left text-inherit"
+                type="button"
+                className={`absolute top-2 right-2 flex size-9 cursor-pointer items-center justify-center rounded-sm border-0 hover:bg-[#29332c] focus-visible:outline-2 focus-visible:outline-[#68f58a] disabled:cursor-wait disabled:opacity-45 ${transaction.pinned ? 'bg-[#29332c] text-[#68f58a]' : 'bg-transparent text-[#b7c8ba]'}`}
+                aria-label={transaction.pinned ? 'Unpin transaction' : 'Pin transaction'}
+                aria-pressed={Boolean(transaction.pinned)}
+                title={transaction.pinned ? 'Unpin transaction' : 'Pin transaction to keep it after signing'}
+                disabled={pin.isPending || decision.isPending}
+                onClick={() => pin.mutate()}
+            >
+                <svg
+                    aria-hidden="true"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill={transaction.pinned ? 'currentColor' : 'none'}
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                >
+                    <path d="M16 3H8l1 7-4 4v3h14v-3l-4-4 1-7Z" />
+                    <path d="M12 17v5" />
+                </svg>
+            </button>
+            <button
+                className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-[14px] pr-14 text-left text-inherit"
                 aria-expanded={expanded}
                 aria-controls={actionsId}
                 onClick={() => setExpanded(!expanded)}
@@ -1311,6 +1346,7 @@ function SavedTransactionItem({
                     {expanded ? '-' : '+'}
                 </span>
             </button>
+            {pin.isError && <p className={`${errorClassName} px-[14px]`}>{errorMessage(pin.error)}</p>}
             <div id={actionsId} hidden={!expanded} className="border-t border-[#36433a] p-[14px]">
                 <div className="grid grid-cols-2 gap-2.5">
                     <button
