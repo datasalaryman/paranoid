@@ -1,4 +1,4 @@
-# @solana/wallet-standard-ghost
+# paranoid-standard-wallet
 
 ## 0.1.1
 

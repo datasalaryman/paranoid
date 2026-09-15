@@ -10,6 +10,20 @@ export default defineConfig({
     manifest: {
         name: 'Paranoid Wallet',
         description: 'Encrypted Solana wallet for local Wallet Standard testing.',
+        icons: {
+            16: 'icons/icon-16.png',
+            32: 'icons/icon-32.png',
+            48: 'icons/icon-48.png',
+            128: 'icons/icon-128.png',
+        },
+        action: {
+            default_icon: {
+                16: 'icons/icon-16.png',
+                32: 'icons/icon-32.png',
+                48: 'icons/icon-48.png',
+                128: 'icons/icon-128.png',
+            },
+        },
         permissions: ['storage'],
         host_permissions: [
             'http://127.0.0.1:8899/*',

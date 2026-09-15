@@ -1,6 +1,8 @@
 # Paranoid Devnet Wallet
 
-Paranoid is a disposable, development-only Solana Wallet Standard Chromium extension. It wraps its injected provider with the Wallet Standard adapter based on Anza's Ghost reference implementation.
+<img src="docs/assets/the-scream.jpg" alt="The Scream by Edvard Munch" width="400">
+
+Paranoid is a disposable, development-only Solana Wallet Standard Chromium extension.
 
 ## Safety
 
@@ -96,3 +98,21 @@ Run `bun test` for signing, co-signing, approval, malformed-payload, size-bounda
 regressions. These tests do not submit transactions to a live cluster.
 
 Reference: [Solana's larger transaction sizes migration guide](https://solana.com/upgrades/larger-transaction-sizes).
+
+## Artwork attribution
+
+The wallet icon and README image are derived from Edvard Munch's _The Scream_ (also titled _The
+Scream of Nature_), 1893, tempera and wax crayon on board, 91 x 73.5 cm. The painting is held by the
+National Museum of Art, Architecture and Design, Oslo, Norway, accession number NG.M.00939.
+
+The digital reproduction was sourced from the [Wikimedia Commons file page](https://commons.wikimedia.org/wiki/File:Edvard_Munch_-_The_Scream.jpg),
+which identifies its source as the [National Museum of Norway](https://www.nasjonalmuseet.no/en/collection/object/NG.M.00939).
+This repository includes a resized and recompressed reproduction at `docs/assets/the-scream.jpg`, a
+square crop at `docs/assets/the-scream-icon.png`, and resized icon derivatives under `public/icons`.
+
+Munch died in 1944. Wikimedia Commons marks this work as public domain in the United States because
+it was published before January 1, 1931, and as public domain in its country of origin and other
+countries and areas where copyright lasts for the author's life plus 70 years or fewer. Commons also
+notes that copyright terms can be longer in some jurisdictions. The file is identified as free of
+known copyright restrictions, including related and neighboring rights, under the [Creative Commons
+Public Domain Mark 1.0](https://creativecommons.org/publicdomain/mark/1.0/).
