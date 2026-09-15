@@ -7,6 +7,16 @@ Paranoid is an encrypted Solana development wallet for Chromium browsers. It imp
 > [!WARNING]
 > Paranoid is built for development and debugging, not for protecting valuable assets. Use dedicated development keypairs, inspect the selected cluster and RPC before signing, and never import a seed phrase or keypair that controls real assets. This applies to Mainnet as well as test clusters.
 
+## Core principles
+
+The wallet was built on several core ideas:
+
+1. **Built for developers** - This wallet is opinionated to serve the needs of developers. Developers need to actually interact with the blockchain in a way that most crypto users do not. Most wallets will abstract away all the things that make Solana the way it is - and with good reason. This wallet explicitly makes the inside of the blockchain more transparent to its users. It does not hide it. It interops directly with the Solana explorer in several places. And soon, it will interop directly with your favorite developer tools. The goal is to support all the levers a developer will ever want conveniently on the extension. 
+
+2. **No trust by design** - Users can choose not to trust this wallet and still be able to use it. All of the code is open source. Users will have to clone the repository and build the extension on their machine in order to use it. This wallet will never generate a keypair for you. You'll have to generate your own keypair with `solana-keygen new` on your own machine. There is no backend and you'll have to supply your own RPC to access Mainnet. All credentials you supply to the extension are encrypted and we will do a final audit when the time is right. If you do not trust a dapp's transaction, you can save it and then inspect it on the Solana explorer. 
+
+3. **Extremely minimal and disposable** - Some features are ommitted because they really are non-essential for developer workflows or will require trust from a third party. Common features like token balances, USD value, NFTs, and browser support are not supported by default. There may be a future roadmap where the extension will allow for plugins, but I won't allow it unless I can support it in a secure way. Because users are expected to keep their keypairs secure by themselves, they can delete the extension from their Chromium browser and rebuild it, adding the new credentials they want. 
+
 ## Current capabilities
 
 - Connect to dapps through Wallet Standard as **Paranoid**.
