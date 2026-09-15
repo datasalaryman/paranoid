@@ -61,7 +61,7 @@ class ExtensionProvider implements ParanoidProvider {
         chain?: SolanaChain
     ): Promise<{ signature: string }> {
         return this.#request('signAndSendTransaction', {
-            transaction: Array.from(serializeUnsigned(transaction)),
+            transaction: Array.from(await serializeUnsigned(transaction)),
             options,
             chain,
         });
@@ -72,7 +72,7 @@ class ExtensionProvider implements ParanoidProvider {
         chain?: SolanaChain
     ): Promise<T> {
         const bytes = await this.#request<number[]>('signTransaction', {
-            transaction: Array.from(serializeUnsigned(transaction)),
+            transaction: Array.from(await serializeUnsigned(transaction)),
             chain,
         });
         return deserializeLike(transaction, bytes) as T;
@@ -83,7 +83,9 @@ class ExtensionProvider implements ParanoidProvider {
         chain?: SolanaChain
     ): Promise<T[]> {
         const bytes = await this.#request<number[][]>('signAllTransactions', {
-            transactions: transactions.map((transaction) => Array.from(serializeUnsigned(transaction))),
+            transactions: await Promise.all(
+                transactions.map(async (transaction) => Array.from(await serializeUnsigned(transaction)))
+            ),
             chain,
         });
         return bytes.map((serialized, index) => deserializeLike(transactions[index]!, serialized) as T);
@@ -96,12 +98,19 @@ class ExtensionProvider implements ParanoidProvider {
 }
 
 function deserializeLike(original: Transaction | VersionedTransaction, bytes: number[]) {
-    return 'version' in original
-        ? VersionedTransaction.deserialize(new Uint8Array(bytes))
-        : Transaction.from(new Uint8Array(bytes));
+    const serialized = new Uint8Array(bytes);
+    // Rehydrate with the caller's SDK. Returning our web3.js 1.x view to a 3.x
+    // dapp leaves it with read-only V1 message methods after signing.
+    if ('version' in original) {
+        const TransactionClass = original.constructor as typeof VersionedTransaction;
+        return TransactionClass.deserialize(serialized);
+    }
+    const TransactionClass = original.constructor as typeof Transaction;
+    return TransactionClass.from(serialized);
 }
 
-function serializeUnsigned(transaction: Transaction | VersionedTransaction): Uint8Array {
+async function serializeUnsigned(transaction: Transaction | VersionedTransaction): Promise<Uint8Array> {
+    // web3.js 3.x makes legacy serialization asynchronous; await both SDK generations.
     return 'version' in transaction
         ? transaction.serialize()
         : transaction.serialize({ requireAllSignatures: false, verifySignatures: false });

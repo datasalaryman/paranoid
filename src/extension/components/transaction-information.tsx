@@ -9,6 +9,7 @@ export interface TransactionInformationProps {
     rpc?: ActiveRpcSummary | null;
     isLoading?: boolean;
     origin?: string;
+    lines?: readonly string[];
     simulationError?: string;
     balanceChanges?: readonly SolBalanceChange[];
     instructionTree?: readonly InstructionTreeNode[];
@@ -23,6 +24,7 @@ export function TransactionInformation({
     rpc,
     isLoading = false,
     origin,
+    lines,
     simulationError,
     balanceChanges,
     instructionTree,
@@ -43,6 +45,13 @@ export function TransactionInformation({
                     {origin}
                 </p>
             )}
+            {lines?.length ? (
+                <div className="my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px] break-words text-xs leading-relaxed">
+                    {lines.map((line, index) => (
+                        <p key={index}>{line}</p>
+                    ))}
+                </div>
+            ) : null}
             {simulationError && (
                 <div
                     role="alert"

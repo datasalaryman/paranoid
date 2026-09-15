@@ -20,8 +20,11 @@ import type {
     SolBalanceChange,
     TransactionHistoryDetails,
     TransactionHistoryPage,
+    TransactionReview,
 } from '@/extension/messages';
 import type { SolanaChain } from '@/lib/solana';
+import { deserializeTransaction } from '@/lib/solana';
+import { V1Transaction } from '@/lib/transaction-v1';
 import {
     addKeypair,
     addRpc,
@@ -42,12 +45,14 @@ import {
     setupVault,
     unlockVault,
     updateRpc,
+    type ActiveRpc,
 } from '@/extension/keypairs';
 import {
     claimSavedTransaction,
     completeSavedTransaction,
     setSavedTransactionPinned,
     saveTransaction,
+    saveTransactions,
     listSavedTransactions,
     moveSavedTransactionToTop,
     refreshSavedTransaction,
@@ -442,7 +447,8 @@ async function sendSol(request: {
         if (activeRpc.id !== request.rpcId) throw new Error('The active RPC changed. Review Send SOL again');
         const publicKey = account.publicKey;
         const rpc = { ...activeRpc };
-        if ((await resolveRpcChain(rpc.url)) !== rpc.chain) throw new Error('The active RPC changed clusters');
+        if ((await resolveRpcChain(rpc.url, rpc.kind)) !== rpc.chain)
+            throw new Error('The active RPC changed clusters');
         const connection = new Connection(rpc.url, 'confirmed');
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
         const transaction = new Transaction({
@@ -468,7 +474,8 @@ async function sendSol(request: {
             canSaveForLater: false,
         });
         if (decision !== 'approve') throw new Error('User cancelled the request');
-        if ((await resolveRpcChain(rpc.url)) !== rpc.chain) throw new Error('The active RPC changed clusters');
+        if ((await resolveRpcChain(rpc.url, rpc.kind)) !== rpc.chain)
+            throw new Error('The active RPC changed clusters');
         if (!(await connection.isBlockhashValid(blockhash, { commitment: 'confirmed' })).value) {
             throw new Error('Send SOL transaction expired. Review and approve a new request');
         }
@@ -498,7 +505,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
     try {
         const rpc = await requireActiveRpc();
         validateRequestedChain(request, rpc.chain);
-        if (request.method === 'signAndSendTransaction' && (await resolveRpcChain(rpc.url)) !== rpc.chain) {
+        if (request.method === 'signAndSendTransaction' && (await resolveRpcChain(rpc.url, rpc.kind)) !== rpc.chain) {
             throw new Error('The active RPC changed clusters after it was added');
         }
         const connection = rpc.chain ? new Connection(rpc.url, 'confirmed') : null;
@@ -544,17 +551,52 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     rpc,
                     connection
                 );
-                sign(transaction, keypair);
+                await sign(transaction, keypair);
                 return Array.from(serialize(transaction));
             }
             case 'signAllTransactions': {
                 await requireTrusted(origin);
-                const transactions = (request.params as { transactions: number[][] }).transactions.map(deserialize);
-                await requireApproval(origin, 'Sign multiple transactions?', [
-                    `${transactions.length} transactions`,
-                    `Network: ${rpc.chain ? `Solana ${rpc.name}` : 'Sign Only (any cluster). Not simulated.'}`,
-                ]);
-                transactions.forEach((transaction) => sign(transaction, keypair));
+                const bytes = (request.params as { transactions: number[][] }).transactions;
+                const transactions = bytes.map(deserialize);
+                const reviews: TransactionReview[] = [];
+                for (const [index, transaction] of transactions.entries()) {
+                    reviews.push({
+                        title: `Sign transaction ${index + 1} of ${transactions.length}`,
+                        // Batch messages can depend on earlier messages in the batch. Preserve
+                        // signAllTransactions semantics instead of simulating each in isolation.
+                        ...(await reviewTransaction(transaction, rpc, connection, false)),
+                    });
+                }
+                const decision = await requestApproval({
+                    origin,
+                    title: 'Sign multiple transactions?',
+                    lines: [
+                        `${transactions.length} transactions`,
+                        ...(connection ? ['Save for Later keeps each transaction as a separate signing request.'] : []),
+                    ],
+                    transaction: true,
+                    canSaveForLater: Boolean(connection),
+                    transactions: reviews,
+                });
+                if (decision === 'save-for-later') {
+                    if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
+                    await saveTransactions(
+                        keypair.publicKey.toBase58(),
+                        rpc.id,
+                        reviews.map((review, index) => ({
+                            origin,
+                            title: review.title,
+                            lines: review.lines,
+                            balanceChanges: review.balanceChanges,
+                            instructionTree: review.instructionTree,
+                            transaction: bytes[index]!,
+                            method: 'signTransaction',
+                        }))
+                    );
+                    throw new Error('Transactions saved for later');
+                }
+                if (decision !== 'approve') throw new Error('User cancelled the request');
+                for (const transaction of transactions) await sign(transaction, keypair);
                 return transactions.map((transaction) => Array.from(serialize(transaction)));
             }
             case 'signAndSendTransaction': {
@@ -575,7 +617,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                     rpc,
                     connection
                 );
-                sign(transaction, keypair);
+                await sign(transaction, keypair);
                 const simulation =
                     'version' in transaction
                         ? await connection.simulateTransaction(transaction)
@@ -622,12 +664,14 @@ export function validateRequestedChain(request: ProviderRequest, rpcChain: Solan
     if (chain !== rpcChain) throw new Error(`The dapp requested ${chain}, but the active RPC uses ${rpcChain}`);
 }
 
-async function resolveRpcChain(url: string): Promise<SolanaChain> {
+export async function resolveRpcChain(url: string, kind: ActiveRpc['kind'] = 'custom'): Promise<SolanaChain> {
     const genesisHash = await new Connection(url, 'confirmed').getGenesisHash();
     if (genesisHash === MAINNET_GENESIS_HASH) return 'solana:mainnet';
     if (genesisHash === DEVNET_GENESIS_HASH) return 'solana:devnet';
     if (genesisHash === TESTNET_GENESIS_HASH) return 'solana:testnet';
-    return 'solana:localnet';
+    // Custom endpoints may be mainnet forks with their own genesis hash.
+    // Only the explicitly selected built-in Localnet profile defaults to localnet.
+    return kind === 'localnet' ? 'solana:localnet' : 'solana:mainnet';
 }
 
 async function getWalletStatus() {
@@ -721,23 +765,11 @@ async function approveOrSaveTransactionForLater(
     connection: Connection | null
 ): Promise<void> {
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
-    const lines = transactionLines(transaction, rpc.name);
-    if (!connection) {
-        lines.push('Sign Only: cluster is not checked. Transaction is not simulated or broadcast.');
-    }
-    const { balanceChanges, instructionTree } = connection
-        ? await simulateTransactionDetails(connection, transaction)
-        : {
-              balanceChanges: undefined,
-              instructionTree: buildInstructionTree(
-                  transaction,
-                  'version' in transaction
-                      ? transaction.message.staticAccountKeys
-                      : transaction.compileMessage().accountKeys,
-                  []
-              ),
-          };
-    const transactionMessage = transactionMessageBase64(transaction);
+    const { lines, balanceChanges, instructionTree, transactionMessage } = await reviewTransaction(
+        transaction,
+        rpc,
+        connection
+    );
     const decision = await requestApproval({
         origin,
         title,
@@ -766,10 +798,44 @@ async function approveOrSaveTransactionForLater(
     throw new Error('User cancelled the request');
 }
 
-function transactionLines(transaction: Transaction | VersionedTransaction, rpcName: string): string[] {
+async function reviewTransaction(
+    transaction: Transaction | VersionedTransaction,
+    rpc: Awaited<ReturnType<typeof requireActiveRpc>>,
+    connection: Connection | null,
+    simulate = true
+): Promise<Omit<TransactionReview, 'title'>> {
+    const lines = transactionLines(transaction, rpc.name);
+    if (!connection) lines.push('Sign Only: cluster is not checked. Transaction is not simulated or broadcast.');
+    else if (!simulate) lines.push('Batch signing: transactions are not simulated.');
+    const details =
+        connection && simulate
+            ? await simulateTransactionDetails(connection, transaction)
+            : {
+                  instructionTree: buildInstructionTree(
+                      transaction,
+                      'version' in transaction
+                          ? transaction.message.staticAccountKeys
+                          : transaction.compileMessage().accountKeys,
+                      []
+                  ),
+              };
+    return { lines, ...details, transactionMessage: transactionMessageBase64(transaction) };
+}
+
+export function transactionLines(transaction: Transaction | VersionedTransaction, rpcName: string): string[] {
     const lines = [`Network: Solana ${rpcName}`];
     if ('version' in transaction) {
         lines.push(`Version: ${transaction.version}`);
+        if (transaction instanceof V1Transaction) {
+            const config = transaction.config;
+            lines.push(
+                `Compute unit limit: ${config.computeUnitLimit ?? 0} CU`,
+                `Loaded accounts data size limit: ${config.loadedAccountsDataSizeLimit ?? 0} bytes`,
+                `Heap size: ${config.heapSize ?? 32768} bytes`,
+                `Priority fee (total): ${config.priorityFeeLamports ?? 0n} lamports`,
+                'V1 resources come from the message config. ComputeBudget instructions have no effect.'
+            );
+        }
         lines.push(`Instructions: ${transaction.message.compiledInstructions.length}`);
         for (const instruction of transaction.message.compiledInstructions) {
             lines.push(
@@ -985,7 +1051,7 @@ async function getActiveTransactionHistoryDetails(signature: string): Promise<Tr
 
     const response = await new Connection(rpc.url, 'confirmed').getTransaction(signature, {
         commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
+        maxSupportedTransactionVersion: 1,
     });
     if (!response) throw new Error('Transaction not found');
     if (!response.meta) throw new Error('Transaction details are unavailable');
@@ -1086,7 +1152,9 @@ async function refreshActiveSavedTransactionBlockhash(id: string): Promise<void>
 }
 
 export function replaceRecentBlockhash(transaction: Transaction | VersionedTransaction, blockhash: string): void {
-    if ('version' in transaction) {
+    if (transaction instanceof V1Transaction) {
+        transaction.replaceRecentBlockhash(blockhash);
+    } else if ('version' in transaction) {
         transaction.message.recentBlockhash = blockhash;
         transaction.signatures = transaction.signatures.map((signature) => new Uint8Array(signature.length));
     } else {
@@ -1095,7 +1163,7 @@ export function replaceRecentBlockhash(transaction: Transaction | VersionedTrans
     }
 }
 
-async function signSavedTransaction(id: string): Promise<{ signature?: string }> {
+async function signSavedTransaction(id: string): Promise<{ signature: string }> {
     const [storedKeypair, rpc] = await Promise.all([getActiveKeypair(), requireActiveRpc()]);
     if (!rpc.chain) throw new Error('Saved transactions are unavailable in Sign Only mode');
     if (!storedKeypair) throw new Error('Select a keypair first');
@@ -1108,24 +1176,28 @@ async function signSavedTransaction(id: string): Promise<{ signature?: string }>
         if (keypair.publicKey.toBase58() !== storedKeypair.publicKey) {
             throw new Error('The active keypair changed before signing');
         }
-        if ((await getActiveRpc())?.id !== rpc.id) throw new Error('The active RPC changed before signing');
-        const transaction = deserialize(savedTransaction.transaction);
-        sign(transaction, keypair);
-        let signature: string | undefined;
-        if (savedTransaction.method === 'signAndSendTransaction') {
-            if ((await resolveRpcChain(rpc.url)) !== rpc.chain) {
-                throw new Error('The active RPC changed clusters after it was added');
-            }
-            const connection = new Connection(rpc.url, 'confirmed');
-            const simulation =
-                'version' in transaction
-                    ? await connection.simulateTransaction(transaction)
-                    : await connection.simulateTransaction(transaction);
-            if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
-            signature = await connection.sendRawTransaction(serialize(transaction), savedTransaction.options);
+        const currentRpc = await getActiveRpc();
+        if (currentRpc?.id !== rpc.id || currentRpc.url !== rpc.url || currentRpc.chain !== rpc.chain) {
+            throw new Error('The active RPC changed before signing');
         }
+        const transaction = deserialize(savedTransaction.transaction);
+        if ((await resolveRpcChain(rpc.url, rpc.kind)) !== rpc.chain) {
+            throw new Error('The active RPC changed clusters after it was added');
+        }
+        await sign(transaction, keypair);
+        // Saving ends the original dapp request. The saved action owns submission,
+        // including requests originally made through signTransaction/signAllTransactions.
+        const connection = new Connection(rpc.url, 'confirmed');
+        const simulationTransaction =
+            'version' in transaction ? transaction : VersionedTransaction.deserialize(serialize(transaction));
+        const simulation = await connection.simulateTransaction(simulationTransaction, {
+            commitment: 'confirmed',
+            sigVerify: true,
+        });
+        if (simulation.value.err) throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+        const signature = await connection.sendRawTransaction(serialize(transaction), savedTransaction.options);
         await completeSavedTransaction(storedKeypair.publicKey, rpc.id, id);
-        return signature ? { signature } : {};
+        return { signature };
     } catch (error) {
         await releaseSavedTransaction(storedKeypair.publicKey, rpc.id, id).catch(() => undefined);
         throw error;
@@ -1135,12 +1207,7 @@ async function signSavedTransaction(id: string): Promise<{ signature?: string }>
 }
 
 function deserialize(bytes: number[]): Transaction | VersionedTransaction {
-    const serialized = new Uint8Array(bytes);
-    try {
-        return VersionedTransaction.deserialize(serialized);
-    } catch {
-        return Transaction.from(serialized);
-    }
+    return deserializeTransaction(new Uint8Array(bytes));
 }
 
 function recentBlockhash(transaction: Transaction | VersionedTransaction): string {
@@ -1149,8 +1216,8 @@ function recentBlockhash(transaction: Transaction | VersionedTransaction): strin
     return blockhash;
 }
 
-function sign(transaction: Transaction | VersionedTransaction, keypair: Keypair): void {
-    if ('version' in transaction) transaction.sign([keypair]);
+async function sign(transaction: Transaction | VersionedTransaction, keypair: Keypair): Promise<void> {
+    if ('version' in transaction) await transaction.sign([keypair]);
     else transaction.partialSign(keypair);
 }
 
@@ -1161,7 +1228,12 @@ function serialize(transaction: Transaction | VersionedTransaction): Uint8Array 
 }
 
 export function transactionMessageBase64(transaction: Transaction | VersionedTransaction): string {
-    const message = 'version' in transaction ? transaction.message.serialize() : transaction.serializeMessage();
+    const message =
+        transaction instanceof V1Transaction
+            ? transaction.messageBytes
+            : 'version' in transaction
+              ? transaction.message.serialize()
+              : transaction.serializeMessage();
     let binary = '';
     for (const byte of message) binary += String.fromCharCode(byte);
     return btoa(binary);

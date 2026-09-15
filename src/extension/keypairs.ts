@@ -347,6 +347,13 @@ export async function removeKeypair(name: string): Promise<void> {
     database.close();
 }
 
+function customRpcChain(chain: SolanaChain): SolanaChain {
+    // Older custom endpoints with an unknown genesis hash were stored as localnet.
+    // Normalize their public label on read; retain stored.chain when decrypting,
+    // because it is part of the encrypted URL's authenticated metadata.
+    return chain === 'solana:localnet' ? 'solana:mainnet' : chain;
+}
+
 export async function listRpcs(): Promise<RpcSummary[]> {
     const custom = await readAllRpcs();
     return [
@@ -355,7 +362,7 @@ export async function listRpcs(): Promise<RpcSummary[]> {
             id,
             name,
             kind: 'custom' as const,
-            chain,
+            chain: customRpcChain(chain),
             explorerMainnet,
         })),
     ];
@@ -387,7 +394,7 @@ export async function addRpc(value: string, chain: SolanaChain): Promise<RpcSumm
     transaction.objectStore(SETTINGS_STORE).put({ key: ACTIVE_RPC_KEY, value: stored.id });
     await transactionDone(transaction);
     database.close();
-    return { id, name, kind: 'custom', chain, explorerMainnet: true };
+    return { id, name, kind: 'custom', chain: customRpcChain(chain), explorerMainnet: true };
 }
 
 export async function getRpc(id: string): Promise<ActiveRpc> {
@@ -402,7 +409,7 @@ export async function getRpc(id: string): Promise<ActiveRpc> {
             id: stored.id,
             name: stored.name,
             kind: 'custom',
-            chain: stored.chain,
+            chain: customRpcChain(stored.chain),
             explorerMainnet: stored.explorerMainnet ?? false,
             url: new TextDecoder().decode(plaintext),
         };
@@ -533,7 +540,7 @@ export async function getActiveRpc(): Promise<ActiveRpc | null> {
             id: stored.id,
             name: stored.name,
             kind: 'custom',
-            chain: stored.chain,
+            chain: customRpcChain(stored.chain),
             explorerMainnet: stored.explorerMainnet ?? false,
             url: new TextDecoder().decode(plaintext),
         };

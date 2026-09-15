@@ -25,6 +25,15 @@ export interface ApprovalDetails {
     balanceChanges?: SolBalanceChange[];
     instructionTree?: InstructionTreeNode[];
     transactionMessage?: string;
+    transactions?: TransactionReview[];
+}
+
+export interface TransactionReview {
+    title: string;
+    lines: string[];
+    balanceChanges?: SolBalanceChange[];
+    instructionTree?: InstructionTreeNode[];
+    transactionMessage: string;
 }
 
 export type ApprovalDecision = 'approve' | 'cancel' | 'save-for-later';

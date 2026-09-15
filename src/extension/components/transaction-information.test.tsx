@@ -33,6 +33,21 @@ test('does not show a simulation error box for successful details', () => {
     expect(markup).toContain('No SOL balance changes');
 });
 
+test('shows V1 message configuration when reviewing a saved transaction', () => {
+    const lines = [
+        'Version: 1',
+        'Compute unit limit: 30000 CU',
+        'Loaded accounts data size limit: 65536 bytes',
+        'Heap size: 32768 bytes',
+        'Priority fee (total): 9007199254740993 lamports',
+    ];
+    const markup = renderToStaticMarkup(
+        <TransactionInformation title="Saved V1 transaction" lines={lines} transactionMessage="dGVzdA==" />
+    );
+    for (const line of lines) expect(markup).toContain(line);
+    expect(markup).toContain('Copy base64 transaction message');
+});
+
 test('renders title actions beside the heading and forwards the RPC to account and program actions', () => {
     const markup = renderToStaticMarkup(
         <TransactionInformation

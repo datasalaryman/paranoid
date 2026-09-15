@@ -90,12 +90,12 @@ export class Wallet implements WalletStandard {
             },
             [SolanaSignAndSendTransaction]: {
                 version: '1.0.0',
-                supportedTransactionVersions: ['legacy', 0],
+                supportedTransactionVersions: ['legacy', 0, 1],
                 signAndSendTransaction: this.#signAndSendTransaction,
             },
             [SolanaSignTransaction]: {
                 version: '1.0.0',
-                supportedTransactionVersions: ['legacy', 0],
+                supportedTransactionVersions: ['legacy', 0, 1],
                 signTransaction: this.#signTransaction,
             },
             [SolanaSignMessage]: {

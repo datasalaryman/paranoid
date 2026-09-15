@@ -44,8 +44,17 @@ export async function saveTransaction(
     rpcId: string,
     transaction: Omit<SavedTransaction, 'id' | 'createdAt'>
 ): Promise<SavedTransaction> {
-    const saved = { ...transaction, id: crypto.randomUUID(), createdAt: Date.now() };
-    await updateSavedTransactions(publicKey, rpcId, (transactions) => [saved, ...transactions]);
+    return (await saveTransactions(publicKey, rpcId, [transaction]))[0]!;
+}
+
+/** Persist a batch in one IndexedDB write, preserving its original order. */
+export async function saveTransactions(
+    publicKey: string,
+    rpcId: string,
+    inputs: Array<Omit<SavedTransaction, 'id' | 'createdAt'>>
+): Promise<SavedTransaction[]> {
+    const saved = inputs.map((transaction) => ({ ...transaction, id: crypto.randomUUID(), createdAt: Date.now() }));
+    await updateSavedTransactions(publicKey, rpcId, (transactions) => [...saved, ...transactions]);
     return saved;
 }
 

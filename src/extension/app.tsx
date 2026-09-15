@@ -1524,10 +1524,12 @@ function SavedTransactionPage() {
     const transaction = request.data;
     const decision = useMutation({
         mutationFn: (value: 'sign' | 'save-for-later' | 'refresh-blockhash' | 'remove') =>
-            sendMessage<{ signature?: string } | boolean>({ type: `saved-transactions:${value}`, id: transactionId }),
+            sendMessage<{ signature: string } | boolean>({ type: `saved-transactions:${value}`, id: transactionId }),
         onSuccess: async (_, value) => {
-            if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
+            if (value === 'sign') {
                 showToast('Transaction signed and sent successfully.', 'success');
+                void queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
+                void queryClient.invalidateQueries({ queryKey: ['transaction-history'] });
             }
             if (value === 'refresh-blockhash') showToast('Transaction blockhash refreshed.', 'success');
             if (value === 'remove') showToast('Saved transaction removed.', 'success');
@@ -1535,7 +1537,7 @@ function SavedTransactionPage() {
             goBack();
         },
         onError: (error, value) => {
-            if (value === 'sign' && transaction?.method === 'signAndSendTransaction') {
+            if (value === 'sign') {
                 showToast(`Transaction failed: ${errorMessage(error)}`, 'error');
             }
         },
@@ -1551,6 +1553,7 @@ function SavedTransactionPage() {
                 title={transaction?.title ?? (request.isPending ? 'Loading transaction...' : 'Transaction unavailable')}
                 isLoading={request.isPending}
                 origin={transaction?.origin}
+                lines={transaction?.lines}
                 simulationError={transaction?.simulationError}
                 balanceChanges={transaction?.balanceChanges}
                 instructionTree={transaction?.instructionTree}
@@ -1560,7 +1563,10 @@ function SavedTransactionPage() {
                     showToast(`Could not copy transaction message: ${errorMessage(error)}`, 'error')
                 }
             />
-            <p className={warningClassName}>Review this transaction before signing.</p>
+            <p className={warningClassName}>
+                Sign &amp; Send submits this saved transaction through{' '}
+                {status.data?.activeRpc?.name ?? 'the selected RPC'}.
+            </p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
             <div className={`mt-6 grid gap-2.5 ${transaction?.expiredBlockhash ? 'grid-cols-2' : 'grid-cols-3'}`}>
                 <button
@@ -1591,7 +1597,7 @@ function SavedTransactionPage() {
                         disabled={!transaction || decision.isPending}
                         onClick={() => decision.mutate('sign')}
                     >
-                        Sign
+                        Sign &amp; Send
                     </button>
                 )}
                 {transaction?.expiredBlockhash && (
@@ -2055,16 +2061,10 @@ function ApprovalPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / SIGNING REQUEST">
-            {request.data?.lines?.length ? (
-                <div className={`${panelClassName} break-words text-xs leading-relaxed`}>
-                    {request.data.lines.map((line, index) => (
-                        <p key={index}>{line}</p>
-                    ))}
-                </div>
-            ) : null}
             <TransactionInformation
                 title={request.data?.title ?? 'Loading request...'}
                 origin={request.data?.origin}
+                lines={request.data?.lines}
                 balanceChanges={request.data?.balanceChanges}
                 instructionTree={request.data?.instructionTree}
                 transactionMessage={request.data?.transactionMessage}
@@ -2073,6 +2073,17 @@ function ApprovalPage() {
                     showToast(`Could not copy transaction message: ${errorMessage(error)}`, 'error')
                 }
             />
+            {request.data?.transactions?.map((transaction, index) => (
+                <section key={index} className="border-t border-[#36433a] pt-3">
+                    <TransactionInformation
+                        {...transaction}
+                        onMessageCopied={() => showToast('Transaction message copied to clipboard.', 'success')}
+                        onMessageCopyError={(error) =>
+                            showToast(`Could not copy transaction message: ${errorMessage(error)}`, 'error')
+                        }
+                    />
+                </section>
+            ))}
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
             <div className={`mt-6 grid ${request.data?.canSaveForLater ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>

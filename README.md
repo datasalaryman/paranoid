@@ -34,6 +34,65 @@ Open a Solana dapp that supports Wallet Standard and choose **Paranoid**. Approv
 
 The legacy provider is also available as `window.paranoid` for local debugging, but dapps should discover the wallet through Wallet Standard.
 
+### Fresh requests versus saved transactions
+
+- Fresh `signTransaction` and `signAllTransactions` requests return signed transactions to the dapp
+  for submission. This applies in Sign Only mode and when a cluster/custom RPC is selected.
+- Fresh `signAndSendTransaction` requests are submitted by the wallet using the selected RPC.
+- Once saved, **Sign & Send** signs, simulates with signature verification, and submits through that
+  saved request's cluster/custom RPC, regardless of which signing method the dapp originally used.
+  Successful submission removes unpinned requests; failures keep them available for retry.
+- Sign Only mode returns signatures to the dapp and does not offer saving or wallet-side submission.
+
 ## Build outputs
 
 `bun run build` compiles the reusable adapter to `lib` and uses WXT to emit the loadable Chrome extension to `.output/chrome-mv3`. Use `bun run build:extension` to rebuild only the extension.
+
+## Custom RPC networks
+
+Custom RPCs use `getGenesisHash` to recognize mainnet, devnet, and testnet. An unrecognized genesis
+hash (for example, a mainnet fork) defaults to **`solana:mainnet`**. The built-in **Localnet** profile
+defaults to `solana:localnet` for local validators.
+
+Existing custom entries saved with the old `solana:localnet` fallback are exposed as mainnet
+automatically. Their encrypted URLs, RPC IDs, and saved transactions are preserved. The Explorer
+Mainnet setting controls explorer links separately from the RPC's Wallet Standard chain label.
+
+## V1 transactions
+
+The Wallet Standard `solana:signTransaction` and `solana:signAndSendTransaction` features advertise
+`['legacy', 0, 1]`. V1 transactions support up to 4096 bytes. Kit handles V1 wire encoding and signing;
+`@solana/web3.js` 1.99+ handles RPC reads and the existing legacy/V0 provider API. The 1.x SDK alone
+cannot serialize or sign V1 transactions.
+
+- Single and batch approvals show V1 compute units, loaded-account data limits, heap size, and the
+  **total priority fee in lamports** from message config. ComputeBudget instructions are no-ops in V1.
+- With an RPC selected, **Save for Later** is available for single requests and batches, including
+  mixed V0/V1 batches. Saving a batch stores every transaction as an individual signing request in
+  the original order, without signing any of them. Batch requests are not simulated in isolation;
+  each saved transaction is simulated when opened for review.
+- Saved V1 requests support the same review, message copying, pin/unpin, reorder, blockhash refresh,
+  sign/send, retry, and removal actions as V0. Their resource limits and fees remain visible during
+  saved-transaction review. Sign Only mode has the same no-saving restriction for both versions.
+- Co-signing preserves the original message and other signatures. Refreshing a saved V1 transaction's
+  blockhash clears every signature, since all signers must sign the new message.
+- Simulations and broadcasts use base64, and transaction-history reads opt in with
+  `maxSupportedTransactionVersion: 1`.
+- Dapps must explicitly set V1 compute-unit and loaded-account data limits (both default to zero),
+  use inline accounts rather than lookup tables, and check the wallet's advertised versions before
+  submitting V1. Paranoid signs the supplied config without rewriting it. The wallet's built-in SOL
+  transfer continues to build legacy transactions; larger transactions are opt-in.
+
+After rebuilding, reload the extension and the dapp tab to pick up the new version advertisement.
+Custom RPCs need Agave 4.2.2+ for correct V1 reads. For local end-to-end testing, use a V1-enabled
+validator (Solana CLI 4.2+, with Agave 4.2.2+ for reads) or Surfpool 1.5+.
+
+The injected provider returns signed transaction objects using the caller's SDK class, preserving
+its message methods. It accepts both synchronous legacy serializers (web3.js 1.x) and asynchronous
+ones (web3.js 3.x). A V1 dapp must itself use Kit 8+ or web3.js 3.0.0-rc.3+ to build, simulate, and
+send V1 transactions; web3.js 1.99's V1 support is read-only even when the wallet supports signing.
+
+Run `bun test` for signing, co-signing, approval, malformed-payload, size-boundary, and mocked RPC
+regressions. These tests do not submit transactions to a live cluster.
+
+Reference: [Solana's larger transaction sizes migration guide](https://solana.com/upgrades/larger-transaction-sizes).

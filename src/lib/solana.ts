@@ -2,6 +2,7 @@
 
 import type { IdentifierString } from '@wallet-standard/base';
 import { Transaction, VersionedTransaction } from '@solana/web3.js';
+import { V1Transaction } from './transaction-v1';
 
 /** Solana Mainnet (beta) cluster, e.g. https://api.mainnet-beta.solana.com */
 export const SOLANA_MAINNET_CHAIN = 'solana:mainnet';
@@ -79,6 +80,7 @@ export function isVersionedTransaction(
 }
 
 export function deserializeTransaction(transaction: Uint8Array): Transaction | VersionedTransaction {
+    if (transaction[0] === 0x81) return new V1Transaction(transaction);
     try {
         return VersionedTransaction.deserialize(transaction);
     } catch {
