@@ -1004,7 +1004,7 @@ function PopupPage() {
             : undefined;
     return (
         <WalletFrame
-            eyebrow="PARANOID / TEST WALLET"
+            eyebrow="PARANOID / DEVELOPMENT WALLET"
             topNav={
                 <AccountNavigation
                     wallets={status.data?.wallets ?? []}

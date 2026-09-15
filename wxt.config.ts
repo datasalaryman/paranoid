@@ -9,7 +9,7 @@ export default defineConfig({
     }),
     manifest: {
         name: 'Paranoid Wallet',
-        description: 'Encrypted Solana wallet for local Wallet Standard testing.',
+        description: 'Encrypted Solana development wallet with Wallet Standard support.',
         icons: {
             16: 'icons/icon-16.png',
             32: 'icons/icon-32.png',
