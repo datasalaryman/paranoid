@@ -388,6 +388,7 @@ function AddKeypairPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / ADD KEYPAIR">
+            <BackButton fallback="/wallet" />
             <h1 className="mt-3 mb-3 text-2xl leading-[1.15] font-bold">Add Keypair</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
                 Create a new Solana keypair in your terminal, then import it here.
@@ -731,12 +732,7 @@ function CustomRpcPage() {
 
     return (
         <WalletFrame eyebrow="PARANOID / ADD RPC">
-            <button
-                className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]"
-                onClick={() => navigate({ to: '/add-rpc' })}
-            >
-                &lt; Back
-            </button>
+            <BackButton fallback="/wallet" />
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Custom RPC</h1>
             <p className="mb-5 text-sm leading-normal text-[#b7c8ba]">
                 The full URL is encrypted with your wallet password before it is stored.
