@@ -3,7 +3,6 @@ import { useNavigate } from '@tanstack/react-router';
 import { type ReactNode, useEffect, useState } from 'react';
 import { SolanaIdentifierActions } from '@/extension/components/blocks/solana-identifier-actions';
 import { errorClassName } from '@/extension/components/ui/styles';
-import { requestCustomRpcAccess } from '@/extension/custom-rpc';
 import type { ActiveRpcSummary, RpcSummary, WalletSummary } from '@/extension/messages';
 import { errorMessage, sendMessage } from '@/extension/runtime-messaging';
 
@@ -25,8 +24,6 @@ export function AccountNavigation({
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [openMenu, setOpenMenu] = useState<'keypair' | 'rpc' | null>(null);
-    const [permissionError, setPermissionError] = useState('');
-    const [isRequestingPermission, setIsRequestingPermission] = useState(false);
     const selectWallet = useMutation({
         mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
         onSuccess: async () => {
@@ -43,24 +40,14 @@ export function AccountNavigation({
     });
 
     const open = (menu: 'keypair' | 'rpc') => {
-        setPermissionError('');
         selectWallet.reset();
         selectRpc.reset();
         setOpenMenu(menu);
     };
 
     const addCustomRpc = async () => {
-        setPermissionError('');
-        setIsRequestingPermission(true);
-        try {
-            await requestCustomRpcAccess();
-            setOpenMenu(null);
-            await navigate({ to: '/add-rpc/custom' });
-        } catch (error) {
-            setPermissionError(errorMessage(error));
-        } finally {
-            setIsRequestingPermission(false);
-        }
+        setOpenMenu(null);
+        await navigate({ to: '/add-rpc/custom' });
     };
 
     return (
@@ -115,7 +102,7 @@ export function AccountNavigation({
                                 key={rpc.id}
                                 rpc={rpc}
                                 active={rpc.id === activeRpc?.id}
-                                disabled={selectRpc.isPending || isRequestingPermission}
+                                disabled={selectRpc.isPending}
                                 onSelect={() => selectRpc.mutate(rpc.id)}
                                 onSettings={() => {
                                     setOpenMenu(null);
@@ -127,22 +114,20 @@ export function AccountNavigation({
                                 key={rpc.id}
                                 label={rpc.name}
                                 active={rpc.id === activeRpc?.id}
-                                disabled={selectRpc.isPending || isRequestingPermission}
+                                disabled={selectRpc.isPending}
                                 onClick={() => selectRpc.mutate(rpc.id)}
                             />
                         )
                     )}
                     <SelectorButton
                         label="+ Add Custom RPC"
-                        disabled={selectRpc.isPending || isRequestingPermission}
+                        disabled={selectRpc.isPending}
                         onClick={() => void addCustomRpc()}
                     />
                     <p className="text-xs text-[#b7c8ba]">
                         Sign Only signs for any app cluster without simulation. Sending requires an RPC.
                     </p>
-                    {(permissionError || selectRpc.isError) && (
-                        <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
-                    )}
+                    {selectRpc.isError && <p className={errorClassName}>{errorMessage(selectRpc.error)}</p>}
                 </SelectorDrawer>
             )}
         </>

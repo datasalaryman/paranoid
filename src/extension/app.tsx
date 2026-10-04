@@ -40,7 +40,7 @@ import {
     warningClassName,
 } from '@/extension/components/ui/styles';
 import { showToast, ToastNotification } from '@/extension/components/ui/toast';
-import { customRpcOrigins, normalizeRpcUrl, requestCustomRpcAccess } from '@/extension/custom-rpc';
+import { normalizeRpcUrl, withCustomRpcAccess } from '@/extension/custom-rpc';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
 import { errorMessage, sendMessage } from '@/extension/runtime-messaging';
 import { parseSolAmount, validateSolRecipient } from '@/extension/send-sol';
@@ -631,7 +631,6 @@ function RenameKeypairPage() {
 function AddRpcPage() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const [permissionError, setPermissionError] = useState('');
     const selectRpc = useMutation({
         mutationFn: (id: string) => sendMessage<boolean>({ type: 'wallet:select-rpc', id }),
         onSuccess: async () => {
@@ -678,22 +677,12 @@ function AddRpcPage() {
                 <button
                     className={`${secondaryButtonClassName} mt-2`}
                     disabled={selectRpc.isPending}
-                    onClick={async () => {
-                        setPermissionError('');
-                        try {
-                            await requestCustomRpcAccess();
-                            await navigate({ to: '/add-rpc/custom' });
-                        } catch (error) {
-                            setPermissionError(errorMessage(error));
-                        }
-                    }}
+                    onClick={() => void navigate({ to: '/add-rpc/custom' })}
                 >
                     Use Custom RPC
                 </button>
             </div>
-            {(permissionError || selectRpc.isError) && (
-                <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
-            )}
+            {selectRpc.isError && <p className={errorClassName}>{errorMessage(selectRpc.error)}</p>}
             <p className={warningClassName}>
                 The selected RPC can observe your account activity and submitted transactions. Sign Only works across
                 clusters without an RPC, simulation, or broadcasting.
@@ -748,9 +737,7 @@ function CustomRpcPage() {
                     setLocalError('');
                     try {
                         const normalized = normalizeRpcUrl(url);
-                        const granted = await chrome.permissions.contains({ origins: customRpcOrigins });
-                        if (!granted) throw new Error('Select Add Custom RPC to allow RPC access first');
-                        addRpc.mutate(normalized);
+                        await withCustomRpcAccess(normalized, () => addRpc.mutateAsync(normalized));
                     } catch (error) {
                         setLocalError(errorMessage(error));
                     }
@@ -884,9 +871,9 @@ function RpcSettingsPage() {
                     setLocalError('');
                     try {
                         const normalized = normalizeRpcUrl(url);
-                        const granted = await chrome.permissions.contains({ origins: customRpcOrigins });
-                        if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
-                        update.mutate({ label, url: normalized, explorerMainnet });
+                        await withCustomRpcAccess(normalized, () =>
+                            update.mutateAsync({ label, url: normalized, explorerMainnet })
+                        );
                     } catch (error) {
                         setLocalError(errorMessage(error));
                     }

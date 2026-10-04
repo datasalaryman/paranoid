@@ -1,5 +1,3 @@
-export const customRpcOrigins = ['http://*/*', 'https://*/*'];
-
 export function normalizeRpcUrl(value: string): string {
     let url: URL;
     try {
@@ -11,7 +9,29 @@ export function normalizeRpcUrl(value: string): string {
     return url.toString();
 }
 
-export async function requestCustomRpcAccess(): Promise<void> {
-    const granted = await chrome.permissions.request({ origins: customRpcOrigins });
-    if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
+export function customRpcOrigin(value: string): string {
+    return `${new URL(normalizeRpcUrl(value)).origin}/*`;
+}
+
+export async function requestCustomRpcAccess(value: string): Promise<void> {
+    const granted = await chrome.permissions.request({ origins: [customRpcOrigin(value)] });
+    if (!granted) throw new Error('Allow access to this custom RPC URL to continue');
+}
+
+export async function withCustomRpcAccess<T>(value: string, request: () => Promise<T>): Promise<T> {
+    const origin = customRpcOrigin(value);
+    if (await chrome.permissions.contains({ origins: [origin] })) return request();
+
+    try {
+        return await request();
+    } catch (error) {
+        if (!isNetworkAccessError(error)) throw error;
+        await requestCustomRpcAccess(value);
+        return request();
+    }
+}
+
+function isNetworkAccessError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /failed to fetch|networkerror|load failed/i.test(message);
 }
