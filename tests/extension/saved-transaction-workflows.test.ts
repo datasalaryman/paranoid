@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { IDBFactory } from 'fake-indexeddb';
 import {
+    AccountRole,
     address,
     appendTransactionMessageInstruction,
     blockhash,
@@ -27,6 +28,7 @@ import * as keypairs from '../../src/extension/keypairs';
 import { listSavedTransactions } from '../../src/extension/saved-transactions';
 
 const payer = Keypair.generate();
+const cosigner = Keypair.generate();
 const recentBlockhash = Keypair.generate().publicKey.toBase58();
 const nextBlockhash = Keypair.generate().publicKey.toBase58();
 const program = Keypair.generate().publicKey;
@@ -44,14 +46,20 @@ const account = {
     encryptedSecretKey: { iv: [], ciphertext: [] },
 };
 
-function fixture(version: 0 | 1): Uint8Array {
+function fixture(version: 0 | 1, requireCosigner = false): Uint8Array {
     if (version === 0) {
         return new VersionedTransaction(
             new TransactionMessage({
                 payerKey: payer.publicKey,
                 recentBlockhash,
                 instructions: [
-                    new TransactionInstruction({ programId: program, keys: [], data: Buffer.alloc(10, 42) }),
+                    new TransactionInstruction({
+                        programId: program,
+                        keys: requireCosigner
+                            ? [{ pubkey: cosigner.publicKey, isSigner: true, isWritable: false }]
+                            : [],
+                        data: Buffer.alloc(10, 42),
+                    }),
                 ],
             }).compileToV0Message()
         ).serialize();
@@ -74,7 +82,18 @@ function fixture(version: 0 | 1): Uint8Array {
                         ),
                     (message) =>
                         appendTransactionMessageInstruction(
-                            { programAddress: address(program.toBase58()), data: new Uint8Array(2000).fill(42) },
+                            {
+                                programAddress: address(program.toBase58()),
+                                accounts: requireCosigner
+                                    ? [
+                                          {
+                                              address: address(cosigner.publicKey.toBase58()),
+                                              role: AccountRole.READONLY_SIGNER,
+                                          },
+                                      ]
+                                    : undefined,
+                                data: new Uint8Array(2000).fill(42),
+                            },
                             message
                         )
                 )
@@ -161,11 +180,19 @@ describe('V0/V1 saved-transaction workflow parity', () => {
         genesis = spyOn(Connection.prototype, 'getGenesisHash').mockResolvedValue(
             'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG'
         );
-        const accounts = spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockResolvedValue([null, null]);
-        simulation = spyOn(Connection.prototype, 'simulateTransaction').mockResolvedValue({
-            context: { slot: 1 },
-            value: { err: null, logs: [], accounts: [null, null] },
-        });
+        const accounts = spyOn(Connection.prototype, 'getMultipleAccountsInfo').mockImplementation(async (keys) =>
+            keys.map(() => null)
+        );
+        simulation = spyOn(Connection.prototype, 'simulateTransaction').mockImplementation(
+            async (_transaction, config) => ({
+                context: { slot: 1 },
+                value: {
+                    err: null,
+                    logs: [],
+                    accounts: config?.accounts?.addresses.map(() => null) ?? [null, null],
+                },
+            })
+        );
         validity = spyOn(Connection.prototype, 'isBlockhashValid').mockResolvedValue({
             context: { slot: 1 },
             value: true,
@@ -311,6 +338,29 @@ describe('V0/V1 saved-transaction workflow parity', () => {
             });
         }
     }
+
+    test.each([0, 1] as const)('does not allow saving a V%s transaction that requires a cosigner', async (version) => {
+        const bytes = fixture(version, true);
+        expect((await provider('signAllTransactions', { transactions: [[...bytes]] })).__error).toBe(
+            'Transactions requiring multiple signers cannot be saved for later'
+        );
+        expect(approvals[0]).toMatchObject({ canSaveForLater: false });
+        expect(approvals[0]!.transactions![0]).toMatchObject({ requiredSignerCount: 2 });
+        expect(broadcast).not.toHaveBeenCalled();
+        expect(await listSavedTransactions(account.publicKey, rpc.id)).toEqual([]);
+    });
+
+    test.each([0, 1] as const)(
+        'does not offer Save for Later for a single V%s transaction that requires a cosigner',
+        async (version) => {
+            const bytes = fixture(version, true);
+            expect((await provider('signTransaction', { transaction: [...bytes] })).__error).toBe(
+                'Transactions requiring multiple signers cannot be saved for later'
+            );
+            expect(approvals[0]).toMatchObject({ canSaveForLater: false, requiredSignerCount: 2 });
+            expect(await listSavedTransactions(account.publicKey, rpc.id)).toEqual([]);
+        }
+    );
 
     test.each([
         [0, 0],

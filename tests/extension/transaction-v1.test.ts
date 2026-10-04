@@ -382,7 +382,8 @@ describe('V1 transaction support', () => {
                 expect(review.transactions?.[0]?.lines ?? review.lines).toContain(
                     'Priority fee (total): 5000 lamports'
                 );
-                expect(review.canSaveForLater).toBe(true);
+                expect(review.transactions?.[0]?.requiredSignerCount ?? review.requiredSignerCount).toBe(2);
+                expect(review.canSaveForLater).toBe(false);
             }
             expect(broadcast).toHaveBeenCalledTimes(1);
             await new Promise((resolve) =>

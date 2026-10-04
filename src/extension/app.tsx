@@ -1500,6 +1500,13 @@ function ApprovalPage() {
             sendMessage<boolean>({ type: 'approval:resolve', id, decision: value }),
         onSuccess: () => window.close(),
     });
+    const multipleSignerCount = request.data?.requiredSignerCount;
+    const batchHasMultipleSigners = request.data?.transactions?.some(
+        ({ requiredSignerCount }) => requiredSignerCount > 1
+    );
+    const cannotSaveMultipleSigners = Boolean(
+        (multipleSignerCount !== undefined && multipleSignerCount > 1) || batchHasMultipleSigners
+    );
 
     if (!id) return <ErrorView message="Missing approval request" close />;
     if (request.isError) return <ErrorView message={errorMessage(request.error)} close />;
@@ -1531,6 +1538,14 @@ function ApprovalPage() {
             ))}
             <p className={warningClassName}>Disposable test key. Never fund this address with real assets.</p>
             {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
+            {cannotSaveMultipleSigners && (
+                <p className={warningClassName} role="alert">
+                    Save for Later is unavailable because{' '}
+                    {batchHasMultipleSigners
+                        ? 'one or more transactions require multiple signatures.'
+                        : `this transaction requires ${multipleSignerCount} signatures.`}
+                </p>
+            )}
             <div className={`mt-6 grid ${request.data?.canSaveForLater ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
                 <button
                     className={`${buttonClassName} bg-[#242b26] text-[#e7f7e9]`}

@@ -567,19 +567,26 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                         ...(await reviewTransaction(transaction, rpc, connection, false)),
                     });
                 }
+                const canSaveForLater =
+                    Boolean(connection) && reviews.every(({ requiredSignerCount }) => requiredSignerCount === 1);
                 const decision = await requestApproval({
                     origin,
                     title: 'Sign multiple transactions?',
                     lines: [
                         `${transactions.length} transactions`,
-                        ...(connection ? ['Save for Later keeps each transaction as a separate signing request.'] : []),
+                        ...(canSaveForLater
+                            ? ['Save for Later keeps each transaction as a separate signing request.']
+                            : []),
                     ],
                     transaction: true,
-                    canSaveForLater: Boolean(connection),
+                    canSaveForLater,
                     transactions: reviews,
                 });
                 if (decision === 'save-for-later') {
                     if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
+                    if (!canSaveForLater) {
+                        throw new Error('Transactions requiring multiple signers cannot be saved for later');
+                    }
                     await saveTransactions(
                         keypair.publicKey.toBase58(),
                         rpc.id,
@@ -765,7 +772,7 @@ async function approveOrSaveTransactionForLater(
     connection: Connection | null
 ): Promise<void> {
     const title = method === 'signTransaction' ? 'Sign transaction' : 'Sign and send transaction';
-    const { lines, balanceChanges, instructionTree, transactionMessage } = await reviewTransaction(
+    const { lines, balanceChanges, instructionTree, transactionMessage, requiredSignerCount } = await reviewTransaction(
         transaction,
         rpc,
         connection
@@ -775,14 +782,18 @@ async function approveOrSaveTransactionForLater(
         title,
         lines,
         transaction: true,
-        canSaveForLater: Boolean(connection),
+        canSaveForLater: Boolean(connection) && requiredSignerCount === 1,
         balanceChanges,
         instructionTree,
         transactionMessage,
+        requiredSignerCount,
     });
     if (decision === 'approve') return;
     if (decision === 'save-for-later') {
         if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
+        if (requiredSignerCount > 1) {
+            throw new Error('Transactions requiring multiple signers cannot be saved for later');
+        }
         await saveTransaction(keypair.publicKey.toBase58(), rpc.id, {
             origin,
             title,
@@ -819,7 +830,12 @@ async function reviewTransaction(
                       []
                   ),
               };
-    return { lines, ...details, transactionMessage: transactionMessageBase64(transaction) };
+    return {
+        lines,
+        ...details,
+        transactionMessage: transactionMessageBase64(transaction),
+        requiredSignerCount: requiredSignerCount(transaction),
+    };
 }
 
 export function transactionLines(transaction: Transaction | VersionedTransaction, rpcName: string): string[] {
@@ -1115,6 +1131,12 @@ function toSavedTransactionSummary(
         instructionTree,
         transactionMessage: transactionMessageBase64(deserialized),
     };
+}
+
+function requiredSignerCount(transaction: Transaction | VersionedTransaction): number {
+    return 'version' in transaction
+        ? transaction.message.header.numRequiredSignatures
+        : transaction.compileMessage().header.numRequiredSignatures;
 }
 
 async function moveActiveSavedTransactionToTop(id: string): Promise<void> {
