@@ -1,14 +1,9 @@
 {
-    "extends": "./tsconfig.base.json",
-    "include": ["src/lib"],
+    "extends": "./.wxt/tsconfig.json",
+    "include": [".wxt/wxt.d.ts", "src/entrypoints", "src/extension", "src/lib", "wxt.config.ts"],
     "compilerOptions": {
-        "outDir": "lib/esm",
-        "rootDir": "src",
-        "declarationDir": "lib/types",
-        "target": "ES2022",
-        "module": "ES2020",
-        "sourceMap": true,
-        "declaration": true,
-        "declarationMap": true
+        "jsx": "react-jsx",
+        "noEmit": true,
+        "noImplicitOverride": false
     }
 }

@@ -18,13 +18,14 @@
         "types": "./lib/types/lib/index.d.ts"
     },
     "scripts": {
+        "test": "bun test",
         "fmt": "prettier --write '{*,**/*}.{ts,tsx,js,jsx,json}'",
         "clean": "shx mkdir -p lib && shx rm -rf lib dist .output",
-        "tsc": "tsc --project tsconfig.json && tsc-alias --project tsconfig.json --resolve-full-paths --resolve-full-extension .js",
+        "tsc": "tsc --project tsconfig.lib.json && tsc-alias --project tsconfig.lib.json --resolve-full-paths --resolve-full-extension .js",
         "build": "npm run clean && npm run tsc && npm run build:extension",
         "dev": "wxt",
         "prepare": "wxt prepare",
-        "typecheck:extension": "wxt prepare && tsc --project tsconfig.extension.json",
+        "typecheck:extension": "wxt prepare && tsc --project tsconfig.json",
         "build:extension": "npm run typecheck:extension && wxt build"
     },
     "dependencies": {

@@ -1,8 +1,8 @@
 {
-    "include": [],
+    "include": ["src/lib"],
     "compilerOptions": {
-        "target": "ESNext",
-        "module": "ESNext",
+        "target": "ES2022",
+        "module": "ES2020",
         "moduleResolution": "Node",
         "baseUrl": "src",
         "esModuleInterop": true,
@@ -15,6 +15,12 @@
         "resolveJsonModule": true,
         "strict": true,
         "stripInternal": true,
-        "noUncheckedIndexedAccess": true
+        "noUncheckedIndexedAccess": true,
+        "outDir": "lib/esm",
+        "rootDir": "src",
+        "declarationDir": "lib/types",
+        "sourceMap": true,
+        "declaration": true,
+        "declarationMap": true
     }
 }
