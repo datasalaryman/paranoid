@@ -20,13 +20,29 @@ import {
     createRouter,
     useNavigate,
 } from '@tanstack/react-router';
-import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react';
-import { BackButton, useBackNavigation } from '@/extension/components/back-button';
-import { TransactionInformation } from '@/extension/components/transaction-information';
-import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
-import { SignOnlyExplorerLinks } from '@/extension/components/sign-only-explorer-links';
-import { showToast, ToastNotification } from '@/extension/components/toast';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { ImportFrame } from '@/extension/components/blocks/import-frame';
+import { SolanaIdentifierActions } from '@/extension/components/blocks/solana-identifier-actions';
+import { TransactionInformation } from '@/extension/components/blocks/transaction-information';
+import { TransactionNavigation } from '@/extension/components/blocks/transaction-navigation';
+import { WalletFrame } from '@/extension/components/blocks/wallet-frame';
+import { AccountNavigation } from '@/extension/components/groups/account-navigation';
+import { SavedTransactionGroups } from '@/extension/components/groups/saved-transaction-groups';
+import { SignOnlyExplorerLinks } from '@/extension/components/groups/sign-only-explorer-links';
+import { BackButton, useBackNavigation } from '@/extension/components/ui/back-button';
+import {
+    buttonClassName,
+    errorClassName,
+    inputClassName,
+    labelClassName,
+    panelClassName,
+    secondaryButtonClassName,
+    warningClassName,
+} from '@/extension/components/ui/styles';
+import { showToast, ToastNotification } from '@/extension/components/ui/toast';
+import { customRpcOrigins, normalizeRpcUrl, requestCustomRpcAccess } from '@/extension/custom-rpc';
 import { keypairFromMnemonic } from '@/extension/mnemonic';
+import { errorMessage, sendMessage } from '@/extension/runtime-messaging';
 import { parseSolAmount, validateSolRecipient } from '@/extension/send-sol';
 import type {
     ActiveRpcSummary,
@@ -37,20 +53,9 @@ import type {
     TransactionHistoryDetails,
     TransactionHistoryPage,
     WalletStatus,
-    WalletSummary,
 } from '@/extension/messages';
 import { getSolanaExplorerAccountTokensUrl } from '@/lib/solana';
 
-const labelClassName = 'my-[1em] text-[11px] tracking-[0.12em] text-[#68f58a] uppercase';
-const panelClassName = 'my-[1em] rounded-[6px] border border-[#29332c] bg-[#151a17] p-[14px]';
-const warningClassName = 'my-[1em] text-xs leading-normal text-[#ffce73]';
-const errorClassName = 'my-[1em] text-xs leading-normal text-[#ff8f8f]';
-const buttonClassName =
-    'cursor-pointer rounded-sm border-0 bg-[#68f58a] p-[13px] font-bold text-[#081009] disabled:cursor-wait disabled:opacity-45';
-const secondaryButtonClassName = `${buttonClassName} border border-[#36433a] bg-[#202722] text-[#e7f7e9]`;
-const inputClassName =
-    'w-full rounded-[6px] border border-[#36433a] bg-[#101411] p-3 text-sm text-[#e7f7e9] outline-none focus:border-[#68f58a]';
-const customRpcOrigins = ['http://*/*', 'https://*/*'];
 const backgroundKeepaliveIntervalMs = 20_000;
 
 const rootRoute = createRootRoute({
@@ -430,7 +435,7 @@ function SeedPhrasePage() {
         <ImportFrame
             title="Import seed phrase"
             error={importKeypair.error}
-            back={() => navigate({ to: '/add-keypair' })}
+            onBack={() => navigate({ to: '/add-keypair' })}
         >
             <label className={labelClassName} htmlFor="seed-phrase">
                 12 or 24 words
@@ -485,7 +490,7 @@ function KeypairFilePage() {
         <ImportFrame
             title="Select keypair file"
             error={importKeypair.error}
-            back={() => navigate({ to: '/add-keypair' })}
+            onBack={() => navigate({ to: '/add-keypair' })}
         >
             <p className="mb-4 text-sm leading-normal text-[#b7c8ba]">Choose the JSON file created by solana-keygen.</p>
             <label className={`${secondaryButtonClassName} block text-center`}>
@@ -1119,9 +1124,7 @@ function SendSolPage() {
             <h1 className="mt-0 mb-3 text-2xl leading-[1.15] font-bold">Send SOL</h1>
             <p className={panelClassName}>
                 From: <span className="break-all font-mono text-xs">{active?.publicKey ?? 'Loading...'}</span>
-                <span className="mt-2 block text-xs text-[#b7c8ba]">
-                    RPC: {rpc?.name}
-                </span>
+                <span className="mt-2 block text-xs text-[#b7c8ba]">RPC: {rpc?.name}</span>
                 <span className="mt-2 block text-xs">Balance: {formatBalance(status.data?.balance)}</span>
             </p>
             <form onSubmit={submit} noValidate className="grid gap-3">
@@ -1358,149 +1361,12 @@ function SavedTransactionsPage() {
             {!savedTransactions.isPending && savedTransactions.data?.length === 0 && (
                 <p className={panelClassName}>There are no saved transactions.</p>
             )}
-            <SavedTransactionGroup title="Fresh transactions" transactions={freshTransactions} navigate={navigate} />
-            <SavedTransactionGroup title="Expired blockhash" transactions={expiredTransactions} navigate={navigate} />
+            <SavedTransactionGroups
+                freshTransactions={freshTransactions}
+                expiredTransactions={expiredTransactions}
+                navigate={navigate}
+            />
         </WalletFrame>
-    );
-}
-
-function SavedTransactionGroup({
-    title,
-    transactions,
-    navigate,
-}: {
-    title: string;
-    transactions: SavedTransactionSummary[];
-    navigate: ReturnType<typeof useNavigate>;
-}) {
-    return (
-        <section className="mb-5">
-            <h2 className={labelClassName}>
-                {title} ({transactions.length})
-            </h2>
-            <div className="grid gap-2.5">
-                {transactions.map((transaction) => (
-                    <SavedTransactionItem key={transaction.id} transaction={transaction} navigate={navigate} />
-                ))}
-            </div>
-        </section>
-    );
-}
-
-function SavedTransactionItem({
-    transaction,
-    navigate,
-}: {
-    transaction: SavedTransactionSummary;
-    navigate: ReturnType<typeof useNavigate>;
-}) {
-    const [expanded, setExpanded] = useState(false);
-    const actionsId = useId();
-    const queryClient = useQueryClient();
-    const pin = useMutation({
-        mutationFn: () =>
-            sendMessage<boolean>({
-                type: 'saved-transactions:set-pinned',
-                id: transaction.id,
-                pinned: !transaction.pinned,
-            }),
-        onSuccess: async () => {
-            await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
-        },
-    });
-    const decision = useMutation({
-        mutationFn: (value: 'refresh-blockhash' | 'remove') =>
-            sendMessage<boolean>({ type: `saved-transactions:${value}`, id: transaction.id }),
-        onSuccess: async (_, value) => {
-            showToast(
-                value === 'remove' ? 'Saved transaction removed.' : 'Transaction blockhash refreshed.',
-                'success'
-            );
-            await queryClient.invalidateQueries({ queryKey: ['saved-transactions'] });
-        },
-    });
-
-    return (
-        <div className="relative min-w-0 rounded-[6px] border border-[#36433a] bg-[#151a17] text-[#e7f7e9]">
-            <button
-                type="button"
-                className={`absolute top-2 right-2 flex size-9 cursor-pointer items-center justify-center rounded-sm border-0 hover:bg-[#29332c] focus-visible:outline-2 focus-visible:outline-[#68f58a] disabled:cursor-wait disabled:opacity-45 ${transaction.pinned ? 'bg-[#29332c] text-[#68f58a]' : 'bg-transparent text-[#b7c8ba]'}`}
-                aria-label={transaction.pinned ? 'Unpin transaction' : 'Pin transaction'}
-                aria-pressed={Boolean(transaction.pinned)}
-                title={transaction.pinned ? 'Unpin transaction' : 'Pin transaction to keep it after signing'}
-                disabled={pin.isPending || decision.isPending}
-                onClick={() => pin.mutate()}
-            >
-                <svg
-                    aria-hidden="true"
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill={transaction.pinned ? 'currentColor' : 'none'}
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                >
-                    <path d="M16 3H8l1 7-4 4v3h14v-3l-4-4 1-7Z" />
-                    <path d="M12 17v5" />
-                </svg>
-            </button>
-            <button
-                className="flex w-full cursor-pointer items-center gap-3 border-0 bg-transparent p-[14px] pr-14 text-left text-inherit"
-                aria-expanded={expanded}
-                aria-controls={actionsId}
-                onClick={() => setExpanded(!expanded)}
-            >
-                <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">{transaction.title}</span>
-                    <span className="mt-1 block truncate text-xs text-[#b7c8ba]">{transaction.origin}</span>
-                    <span className="mt-2 block text-[11px] tracking-[0.08em] text-[#68f58a] uppercase">
-                        {new Date(transaction.createdAt).toLocaleString()}
-                    </span>
-                </span>
-                <span aria-hidden="true" className="text-[#68f58a]">
-                    {expanded ? '-' : '+'}
-                </span>
-            </button>
-            {pin.isError && <p className={`${errorClassName} px-[14px]`}>{errorMessage(pin.error)}</p>}
-            <div id={actionsId} hidden={!expanded} className="border-t border-[#36433a] p-[14px]">
-                <div className="grid grid-cols-2 gap-2.5">
-                    <button
-                        className={buttonClassName}
-                        disabled={decision.isPending}
-                        onClick={() =>
-                            navigate({
-                                to: '/saved-transactions/$transactionId',
-                                params: { transactionId: transaction.id },
-                            })
-                        }
-                    >
-                        View
-                    </button>
-                    <button className={secondaryButtonClassName} onClick={() => setExpanded(false)}>
-                        Cancel
-                    </button>
-                    <button
-                        className={secondaryButtonClassName}
-                        disabled={decision.isPending}
-                        onClick={() => decision.mutate('remove')}
-                    >
-                        Remove
-                    </button>
-                    {transaction.expiredBlockhash && (
-                        <button
-                            className={secondaryButtonClassName}
-                            disabled={decision.isPending}
-                            onClick={() => decision.mutate('refresh-blockhash')}
-                        >
-                            Refresh Blockhash
-                        </button>
-                    )}
-                </div>
-                {decision.isError && <p className={errorClassName}>{errorMessage(decision.error)}</p>}
-            </div>
-        </div>
     );
 }
 
@@ -1618,410 +1484,6 @@ function useSavedTransactions(publicKey?: string, rpcId?: string) {
     });
 }
 
-function TransactionNavigation({
-    active,
-    savedTransactionCount,
-}: {
-    active?: 'saved-transactions' | 'history' | 'send';
-    savedTransactionCount: number;
-}) {
-    const navigate = useNavigate();
-    return (
-        <nav className="sticky bottom-0 grid grid-cols-3 divide-x divide-[#36433a] border-t border-[#36433a] bg-[#151a17]">
-            <TransactionNavButton
-                label="Send SOL"
-                value="Transfer"
-                active={active === 'send'}
-                onClick={() => navigate({ to: '/send-sol' })}
-            />
-            <TransactionNavButton
-                label="Saved Transactions"
-                value={`${savedTransactionCount} saved`}
-                active={active === 'saved-transactions'}
-                onClick={() => navigate({ to: '/saved-transactions' })}
-            />
-            <TransactionNavButton
-                label="Transaction History"
-                value="Recent activity"
-                active={active === 'history'}
-                onClick={() => navigate({ to: '/transaction-history' })}
-            />
-        </nav>
-    );
-}
-
-function TransactionNavButton({
-    label,
-    value,
-    active,
-    onClick,
-}: {
-    label: string;
-    value: string;
-    active: boolean;
-    onClick: () => void;
-}) {
-    return (
-        <button
-            className={`min-w-0 cursor-pointer border-0 px-3 py-3.5 text-center hover:bg-[#202722] ${
-                active ? 'bg-[#142419] text-[#b9ffca]' : 'bg-transparent text-[#e7f7e9]'
-            }`}
-            type="button"
-            aria-current={active ? 'page' : undefined}
-            onClick={active ? undefined : onClick}
-        >
-            <span className="block text-[10px] tracking-[0.1em] text-[#68f58a] uppercase">{label}</span>
-            <span className="mt-1 block truncate text-xs font-semibold">{value}</span>
-        </button>
-    );
-}
-
-function AccountNavigation({
-    wallets,
-    activeWallet,
-    rpcs,
-    activeRpc,
-}: {
-    wallets: WalletSummary[];
-    activeWallet: WalletSummary | null;
-    rpcs: RpcSummary[];
-    activeRpc: ActiveRpcSummary | null;
-}) {
-    const navigate = useNavigate();
-    const queryClient = useQueryClient();
-    const [openMenu, setOpenMenu] = useState<'keypair' | 'rpc' | null>(null);
-    const [permissionError, setPermissionError] = useState('');
-    const [isRequestingPermission, setIsRequestingPermission] = useState(false);
-    const selectWallet = useMutation({
-        mutationFn: (name: string) => sendMessage<boolean>({ type: 'wallet:select', name }),
-        onSuccess: async () => {
-            setOpenMenu(null);
-            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
-        },
-    });
-    const selectRpc = useMutation({
-        mutationFn: (id: string) => sendMessage<boolean>({ type: 'wallet:select-rpc', id }),
-        onSuccess: async () => {
-            setOpenMenu(null);
-            await queryClient.invalidateQueries({ queryKey: ['wallet-status'] });
-        },
-    });
-
-    const open = (menu: 'keypair' | 'rpc') => {
-        setPermissionError('');
-        selectWallet.reset();
-        selectRpc.reset();
-        setOpenMenu(menu);
-    };
-
-    const addCustomRpc = async () => {
-        setPermissionError('');
-        setIsRequestingPermission(true);
-        try {
-            await requestCustomRpcAccess();
-            setOpenMenu(null);
-            await navigate({ to: '/add-rpc/custom' });
-        } catch (error) {
-            setPermissionError(errorMessage(error));
-        } finally {
-            setIsRequestingPermission(false);
-        }
-    };
-
-    return (
-        <>
-            <nav className="grid grid-cols-2 divide-x divide-[#36433a] border-b border-[#36433a] bg-[#151a17]">
-                <AccountNavButton
-                    label="Active Keypair"
-                    value={activeWallet?.label ?? 'Loading...'}
-                    onClick={() => open('keypair')}
-                />
-                <AccountNavButton
-                    label="Active RPC"
-                    value={activeRpc?.name ?? 'Loading...'}
-                    onClick={() => open('rpc')}
-                />
-            </nav>
-            {openMenu === 'keypair' && (
-                <SelectorDrawer title="Active Keypair" onClose={() => setOpenMenu(null)}>
-                    {wallets.map((wallet) => (
-                        <KeypairSelectorRow
-                            key={wallet.name}
-                            wallet={wallet}
-                            rpc={activeRpc}
-                            active={wallet.name === activeWallet?.name}
-                            disabled={selectWallet.isPending}
-                            onSelect={() => selectWallet.mutate(wallet.name)}
-                            onRename={() => {
-                                setOpenMenu(null);
-                                void navigate({
-                                    to: '/keypairs/$keypairName/rename',
-                                    params: { keypairName: wallet.name },
-                                });
-                            }}
-                        />
-                    ))}
-                    <SelectorButton
-                        label="+ Add keypair"
-                        disabled={selectWallet.isPending}
-                        onClick={() => {
-                            setOpenMenu(null);
-                            void navigate({ to: '/add-keypair' });
-                        }}
-                    />
-                    {selectWallet.isError && <p className={errorClassName}>{errorMessage(selectWallet.error)}</p>}
-                </SelectorDrawer>
-            )}
-            {openMenu === 'rpc' && (
-                <SelectorDrawer title="Active RPC" onClose={() => setOpenMenu(null)}>
-                    {rpcs.map((rpc) =>
-                        rpc.kind === 'custom' ? (
-                            <RpcSelectorRow
-                                key={rpc.id}
-                                rpc={rpc}
-                                active={rpc.id === activeRpc?.id}
-                                disabled={selectRpc.isPending || isRequestingPermission}
-                                onSelect={() => selectRpc.mutate(rpc.id)}
-                                onSettings={() => {
-                                    setOpenMenu(null);
-                                    void navigate({ to: '/rpcs/$rpcId/settings', params: { rpcId: rpc.id } });
-                                }}
-                            />
-                        ) : (
-                            <SelectorButton
-                                key={rpc.id}
-                                label={rpc.name}
-                                active={rpc.id === activeRpc?.id}
-                                disabled={selectRpc.isPending || isRequestingPermission}
-                                onClick={() => selectRpc.mutate(rpc.id)}
-                            />
-                        )
-                    )}
-                    <SelectorButton
-                        label="+ Add Custom RPC"
-                        disabled={selectRpc.isPending || isRequestingPermission}
-                        onClick={() => void addCustomRpc()}
-                    />
-                    <p className="text-xs text-[#b7c8ba]">
-                        Sign Only signs for any app cluster without simulation. Sending requires an RPC.
-                    </p>
-                    {(permissionError || selectRpc.isError) && (
-                        <p className={errorClassName}>{permissionError || errorMessage(selectRpc.error)}</p>
-                    )}
-                </SelectorDrawer>
-            )}
-        </>
-    );
-}
-
-function KeypairSelectorRow({
-    wallet,
-    rpc,
-    active,
-    disabled,
-    onSelect,
-    onRename,
-}: {
-    wallet: WalletSummary;
-    rpc: ActiveRpcSummary | null;
-    active: boolean;
-    disabled: boolean;
-    onSelect: () => void;
-    onRename: () => void;
-}) {
-    return (
-        <div
-            className={`flex overflow-hidden rounded-[6px] border ${
-                active ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]' : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9]'
-            }`}
-        >
-            <div className="min-w-0 flex-1 p-3">
-                <button
-                    className="block w-full min-w-0 cursor-pointer border-0 bg-transparent text-left text-sm hover:text-[#68f58a] disabled:cursor-wait disabled:opacity-45"
-                    type="button"
-                    disabled={disabled}
-                    aria-pressed={active}
-                    onClick={onSelect}
-                >
-                    <span className="block truncate font-semibold">{wallet.label}</span>
-                    {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
-                </button>
-                <div className="mt-1 flex items-center gap-1 text-xs text-[#829486]">
-                    <span className="font-mono" title={wallet.publicKey}>
-                        {truncateAddress(wallet.publicKey)}
-                    </span>
-                    <SolanaIdentifierActions value={wallet.publicKey} rpc={rpc} />
-                </div>
-            </div>
-            <button
-                className="flex w-11 shrink-0 cursor-pointer items-center justify-center border-0 border-l border-[#36433a] bg-transparent text-[#b7c8ba] hover:bg-[#202722] hover:text-[#e7f7e9] disabled:cursor-wait disabled:opacity-45"
-                type="button"
-                disabled={disabled}
-                aria-label={`Rename ${wallet.label}`}
-                onClick={onRename}
-            >
-                <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <circle cx="4" cy="10" r="1.5" />
-                    <circle cx="10" cy="10" r="1.5" />
-                    <circle cx="16" cy="10" r="1.5" />
-                </svg>
-            </button>
-        </div>
-    );
-}
-
-function RpcSelectorRow({
-    rpc,
-    active,
-    disabled,
-    onSelect,
-    onSettings,
-}: {
-    rpc: RpcSummary;
-    active: boolean;
-    disabled: boolean;
-    onSelect: () => void;
-    onSettings: () => void;
-}) {
-    return (
-        <div
-            className={`flex overflow-hidden rounded-[6px] border ${
-                active ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]' : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9]'
-            }`}
-        >
-            <button
-                className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent p-3 text-left text-sm hover:bg-[#202722] disabled:cursor-wait disabled:opacity-45"
-                type="button"
-                disabled={disabled}
-                aria-pressed={active}
-                onClick={onSelect}
-            >
-                <span className="block truncate font-semibold">{rpc.name} (Custom)</span>
-                {active && <span className="mt-1 block text-[10px] tracking-[0.08em] uppercase">Active</span>}
-            </button>
-            <button
-                className="flex w-11 shrink-0 cursor-pointer items-center justify-center border-0 border-l border-[#36433a] bg-transparent text-[#b7c8ba] hover:bg-[#202722] hover:text-[#e7f7e9] disabled:cursor-wait disabled:opacity-45"
-                type="button"
-                disabled={disabled}
-                aria-label={`Edit ${rpc.name}`}
-                onClick={onSettings}
-            >
-                <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <circle cx="4" cy="10" r="1.5" />
-                    <circle cx="10" cy="10" r="1.5" />
-                    <circle cx="16" cy="10" r="1.5" />
-                </svg>
-            </button>
-        </div>
-    );
-}
-
-function AccountNavButton({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
-    return (
-        <button
-            className="min-w-0 cursor-pointer border-0 bg-transparent px-3 py-3.5 text-center text-[#e7f7e9] hover:bg-[#202722]"
-            type="button"
-            aria-haspopup="dialog"
-            onClick={onClick}
-        >
-            <span className="block text-[10px] tracking-[0.1em] text-[#68f58a] uppercase">{label}</span>
-            <span className="mt-1 block truncate text-xs font-semibold">{value}</span>
-        </button>
-    );
-}
-
-function SelectorDrawer({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-    useEffect(() => {
-        const closeOnEscape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose();
-        };
-        window.addEventListener('keydown', closeOnEscape);
-        return () => window.removeEventListener('keydown', closeOnEscape);
-    }, [onClose]);
-
-    return (
-        <div
-            className="fixed inset-0 z-40 bg-black/70 transition-opacity duration-300 ease-out starting:opacity-0 motion-reduce:transition-none"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="selector-drawer-title"
-            onMouseDown={(event) => {
-                if (event.target === event.currentTarget) onClose();
-            }}
-        >
-            <section className="max-h-[85vh] w-full translate-y-0 overflow-y-auto overscroll-contain rounded-b-[8px] border-x border-b border-[#36433a] bg-[#101411] p-4 shadow-2xl transition-transform duration-300 ease-out starting:-translate-y-full motion-reduce:transition-none">
-                <div className="mb-3 flex items-center justify-between gap-4">
-                    <h2 id="selector-drawer-title" className="m-0 text-lg font-bold">
-                        {title}
-                    </h2>
-                    <button
-                        className="cursor-pointer border-0 bg-transparent p-1 text-xl leading-none text-[#b7c8ba]"
-                        type="button"
-                        aria-label={`Close ${title}`}
-                        onClick={onClose}
-                    >
-                        &times;
-                    </button>
-                </div>
-                <div className="grid gap-2">{children}</div>
-            </section>
-        </div>
-    );
-}
-
-function SelectorButton({
-    label,
-    active = false,
-    disabled = false,
-    onClick,
-}: {
-    label: string;
-    active?: boolean;
-    disabled?: boolean;
-    onClick: () => void;
-}) {
-    return (
-        <button
-            className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-[6px] border p-3 text-left text-sm disabled:cursor-wait disabled:opacity-45 ${
-                active
-                    ? 'border-[#68f58a] bg-[#142419] text-[#b9ffca]'
-                    : 'border-[#36433a] bg-[#151a17] text-[#e7f7e9] hover:bg-[#202722]'
-            }`}
-            type="button"
-            disabled={disabled}
-            aria-pressed={active}
-            onClick={onClick}
-        >
-            <span className="truncate font-semibold">{label}</span>
-            {active && <span className="text-[10px] tracking-[0.08em] uppercase">Active</span>}
-        </button>
-    );
-}
-
-function ImportFrame({
-    title,
-    error,
-    back,
-    children,
-}: {
-    title: string;
-    error: string;
-    back: () => void;
-    children: ReactNode;
-}) {
-    return (
-        <WalletFrame eyebrow="PARANOID / ADD KEYPAIR">
-            <button className="mb-4 cursor-pointer border-0 bg-transparent p-0 text-xs text-[#b7c8ba]" onClick={back}>
-                &lt; Back
-            </button>
-            <h1 className="mt-0 mb-5 text-2xl leading-[1.15] font-bold">{title}</h1>
-            {children}
-            {error && <p className={errorClassName}>{error}</p>}
-            <p className={warningClassName}>Never import a seed phrase or keypair that holds real assets.</p>
-        </WalletFrame>
-    );
-}
-
 function useImportKeypair() {
     const [localError, setLocalError] = useState('');
     const mutation = useMutation({
@@ -2111,40 +1573,6 @@ function ApprovalPage() {
     );
 }
 
-function WalletFrame({
-    eyebrow,
-    children,
-    welcome = false,
-    topNav,
-    bottomNav,
-}: {
-    eyebrow: string;
-    children: ReactNode;
-    welcome?: boolean;
-    topNav?: ReactNode;
-    bottomNav?: ReactNode;
-}) {
-    if (topNav || bottomNav) {
-        return (
-            <main className="flex min-h-screen flex-col">
-                {topNav}
-                <div className="flex-1 p-7">
-                    <p className={labelClassName}>{eyebrow}</p>
-                    {children}
-                </div>
-                {bottomNav}
-            </main>
-        );
-    }
-
-    return (
-        <main className={welcome ? 'flex min-h-[460px] flex-col justify-between p-7' : 'p-7'}>
-            <p className={`${labelClassName} ${welcome ? 'mb-auto' : ''}`}>{eyebrow}</p>
-            {children}
-        </main>
-    );
-}
-
 function ErrorView({ message, close = false }: { message: string; close?: boolean }) {
     return (
         <WalletFrame eyebrow="PARANOID / WALLET">
@@ -2158,16 +1586,6 @@ function ErrorView({ message, close = false }: { message: string; close?: boolea
     );
 }
 
-function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-async function sendMessage<T>(message: Record<string, unknown>): Promise<T> {
-    const response = (await chrome.runtime.sendMessage(message)) as T | { __error: string };
-    if (response && typeof response === 'object' && '__error' in response) throw new Error(response.__error);
-    return response;
-}
-
 function getWalletStatus(): Promise<WalletStatus> {
     return sendMessage<WalletStatus>({ type: 'wallet:status' });
 }
@@ -2175,22 +1593,6 @@ function getWalletStatus(): Promise<WalletStatus> {
 function nextWalletPath(status: WalletStatus): '/add-keypair' | '/add-rpc' | '/wallet' {
     if (!status.active) return '/add-keypair';
     return status.activeRpc ? '/wallet' : '/add-rpc';
-}
-
-function normalizeRpcUrl(value: string): string {
-    let url: URL;
-    try {
-        url = new URL(value.trim());
-    } catch {
-        throw new Error('Enter a valid RPC URL');
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('RPC URL must use http or https');
-    return url.toString();
-}
-
-async function requestCustomRpcAccess(): Promise<void> {
-    const granted = await chrome.permissions.request({ origins: customRpcOrigins });
-    if (!granted) throw new Error('Allow access to custom RPC URLs to continue');
 }
 
 function truncateAddress(address: string | undefined): string {

@@ -1,4 +1,4 @@
-import { showToast } from '@/extension/components/toast';
+import { showToast } from '@/extension/components/ui/toast';
 import type { ActiveRpcSummary } from '@/extension/messages';
 import { getSolanaExplorerAccountUrl, getSolanaExplorerTransactionUrl } from '@/lib/solana';
 

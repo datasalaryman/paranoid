@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { SolanaIdentifierActions } from '../../../src/extension/components/solana-identifier-actions';
-import { SignOnlyExplorerLinks } from '../../../src/extension/components/sign-only-explorer-links';
+import { SolanaIdentifierActions } from '../../../src/extension/components/blocks/solana-identifier-actions';
+import { SignOnlyExplorerLinks } from '../../../src/extension/components/groups/sign-only-explorer-links';
 
 test('Sign Only keeps copying available without linking to an unrelated Explorer cluster', () => {
     const markup = renderToStaticMarkup(

@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import type { ActiveRpcSummary, InstructionTreeNode } from '@/extension/messages';
-import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
+import { SolanaIdentifierActions } from '@/extension/components/blocks/solana-identifier-actions';
 
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { InstructionTree } from '@/extension/components/instruction-tree';
-import { SolanaIdentifierActions } from '@/extension/components/solana-identifier-actions';
+import { InstructionTree } from '@/extension/components/blocks/instruction-tree';
+import { SolanaIdentifierActions } from '@/extension/components/blocks/solana-identifier-actions';
 import type { ActiveRpcSummary, InstructionTreeNode, SolBalanceChange } from '@/extension/messages';
 
 export interface TransactionInformationProps {

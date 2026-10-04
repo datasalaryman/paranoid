@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ActiveRpcSummary } from '@/extension/messages';
 import { getSolanaExplorerAccountUrl, getSolanaExplorerTransactionUrl, type SolanaChain } from '@/lib/solana';
-import { SolanaIdentifierActions } from '../../../src/extension/components/solana-identifier-actions';
-import { InstructionTree } from '../../../src/extension/components/instruction-tree';
+import { InstructionTree } from '../../../src/extension/components/blocks/instruction-tree';
+import { SolanaIdentifierActions } from '../../../src/extension/components/blocks/solana-identifier-actions';
 
 test('account and transaction Explorer URLs preserve cluster behavior and encode identifiers', () => {
     for (const [getUrl, path] of [
