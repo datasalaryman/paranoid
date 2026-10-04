@@ -1,9 +1,18 @@
 import { expect, spyOn, test } from 'bun:test';
 import { Connection } from '@solana/web3.js';
 import { IDBFactory } from 'fake-indexeddb';
-import { resolveRpcChain, validateRequestedChain } from './background';
-import { addRpc, getActiveRpc, getRpc, getVaultStatus, listRpcs, selectRpc, setupVault, updateRpc } from './keypairs';
-import { listSavedTransactions, saveTransaction } from './saved-transactions';
+import { resolveRpcChain, validateRequestedChain } from '../../src/extension/background';
+import {
+    addRpc,
+    getActiveRpc,
+    getRpc,
+    getVaultStatus,
+    listRpcs,
+    selectRpc,
+    setupVault,
+    updateRpc,
+} from '../../src/extension/keypairs';
+import { listSavedTransactions, saveTransaction } from '../../src/extension/saved-transactions';
 
 test('custom RPCs default to mainnet while recognized networks and built-in localnet retain their chains', async () => {
     const genesis = spyOn(Connection.prototype, 'getGenesisHash');

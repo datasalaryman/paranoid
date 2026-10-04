@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from '@tanstack/react-router';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BackButton, useBackNavigation } from './back-button';
+import { BackButton, useBackNavigation } from '../../../src/extension/components/back-button';
 
 function setup(initialEntries: string[], fallback: Parameters<typeof useBackNavigation>[0]) {
     const history = createMemoryHistory({ initialEntries });

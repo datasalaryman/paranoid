@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { knownProgramDetails } from './instruction-tree';
+import { knownProgramDetails } from '../../../src/extension/components/instruction-tree';
 
 describe('knownProgramDetails', () => {
     test('uses the System Program IDL discriminator', () => {

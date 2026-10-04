@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mergeTransactionHistory, type TransactionHistoryItem } from './transaction-history';
+import { mergeTransactionHistory, type TransactionHistoryItem } from '../../src/extension/transaction-history';
 
 const item = (signature: string, slot: number): TransactionHistoryItem => ({
     signature,

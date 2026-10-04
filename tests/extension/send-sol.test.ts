@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Keypair, PublicKey } from '@solana/web3.js';
-import { parseSolAmount, validateSolRecipient } from './send-sol';
+import { parseSolAmount, validateSolRecipient } from '../../src/extension/send-sol';
 
 describe('SOL send validation', () => {
     test('accepts on-curve addresses and rejects malformed addresses and PDAs', () => {

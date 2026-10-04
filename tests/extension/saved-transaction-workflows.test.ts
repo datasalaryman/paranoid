@@ -14,12 +14,17 @@ import {
 } from '@solana/kit';
 import { Connection, Keypair, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
-import { deserializeTransaction } from '../lib/solana';
-import { V1Transaction } from '../lib/transaction-v1';
-import { setupBackground, transactionMessageBase64 } from './background';
-import type { ApprovalDecision, ApprovalDetails, ProviderMethod, SavedTransactionSummary } from './messages';
-import * as keypairs from './keypairs';
-import { listSavedTransactions } from './saved-transactions';
+import { deserializeTransaction } from '../../src/lib/solana';
+import { V1Transaction } from '../../src/lib/transaction-v1';
+import { setupBackground, transactionMessageBase64 } from '../../src/extension/background';
+import type {
+    ApprovalDecision,
+    ApprovalDetails,
+    ProviderMethod,
+    SavedTransactionSummary,
+} from '../../src/extension/messages';
+import * as keypairs from '../../src/extension/keypairs';
+import { listSavedTransactions } from '../../src/extension/saved-transactions';
 
 const payer = Keypair.generate();
 const recentBlockhash = Keypair.generate().publicKey.toBase58();

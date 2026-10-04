@@ -1,13 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import {
-    Keypair,
-    SystemProgram,
-    Transaction,
-    TransactionMessage,
-    VersionedTransaction,
-} from '@solana/web3.js';
+import { Keypair, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
-import { signerFromSecretKey } from './signer';
+import { signerFromSecretKey } from '../../src/extension/signer';
 
 describe('signerFromSecretKey', () => {
     test('keeps message signatures valid after decrypted bytes are cleared', () => {
@@ -46,8 +40,8 @@ describe('signerFromSecretKey', () => {
         versioned.sign([signer]);
 
         expect(legacy.verifySignatures()).toBe(true);
-        expect(nacl.sign.detached.verify(message.serialize(), versioned.signatures[0]!, signer.publicKey.toBytes())).toBe(
-            true
-        );
+        expect(
+            nacl.sign.detached.verify(message.serialize(), versioned.signatures[0]!, signer.publicKey.toBytes())
+        ).toBe(true);
     });
 });

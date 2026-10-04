@@ -8,7 +8,7 @@ import {
     saveTransaction,
     setSavedTransactionPinned,
     type SavedTransaction,
-} from './saved-transactions';
+} from '../../src/extension/saved-transactions';
 
 const publicKey = 'wallet';
 const rpcId = 'devnet';

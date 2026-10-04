@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { TransactionInformation } from './transaction-information';
+import { TransactionInformation } from '../../../src/extension/components/transaction-information';
 
 test('shows simulation errors before saved balance changes without hiding transaction details', () => {
     const markup = renderToStaticMarkup(

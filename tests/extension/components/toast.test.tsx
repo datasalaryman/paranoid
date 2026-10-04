@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ToastNotification } from './toast';
+import { ToastNotification } from '../../../src/extension/components/toast';
 
 test('keeps a live region mounted above modals for clipboard and other notifications', () => {
     const markup = renderToStaticMarkup(<ToastNotification />);

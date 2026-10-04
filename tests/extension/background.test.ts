@@ -16,9 +16,9 @@ import {
     setupBackground,
     transactionMessageBase64,
     validateRequestedChain,
-} from './background';
-import type { ProviderRequest } from './messages';
-import * as keypairs from './keypairs';
+} from '../../src/extension/background';
+import type { ProviderRequest } from '../../src/extension/messages';
+import * as keypairs from '../../src/extension/keypairs';
 
 test('Send SOL restricts senders and signs only approved, unexpired transactions in the pinned context', async () => {
     const originalChrome = globalThis.chrome;

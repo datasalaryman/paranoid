@@ -22,13 +22,13 @@ import {
 } from '@solana/web3.js';
 import type { WindowRegisterWalletEvent } from '@wallet-standard/base';
 import nacl from 'tweetnacl';
-import { Wallet } from '../lib/wallet';
-import type { ParanoidProvider } from '../lib/window';
-import { V1Transaction } from '../lib/transaction-v1';
-import { setupBackground, transactionMessageBase64 } from './background';
-import { setupContent } from './content';
-import { setupInpage } from './inpage';
-import * as keypairs from './keypairs';
+import { Wallet } from '../../src/lib/wallet';
+import type { ParanoidProvider } from '../../src/lib/window';
+import { V1Transaction } from '../../src/lib/transaction-v1';
+import { setupBackground, transactionMessageBase64 } from '../../src/extension/background';
+import { setupContent } from '../../src/extension/content';
+import { setupInpage } from '../../src/extension/inpage';
+import * as keypairs from '../../src/extension/keypairs';
 
 const payer = Keypair.generate();
 const cosigner = Keypair.generate();

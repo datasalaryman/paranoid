@@ -17,18 +17,18 @@ import {
 import { ComputeBudgetProgram, Connection, Keypair, VersionedTransaction } from '@solana/web3.js';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { deserializeTransaction } from '../lib/solana';
-import { V1Transaction } from '../lib/transaction-v1';
-import { Wallet } from '../lib/wallet';
-import type { ParanoidProvider } from '../lib/window';
+import { deserializeTransaction } from '../../src/lib/solana';
+import { V1Transaction } from '../../src/lib/transaction-v1';
+import { Wallet } from '../../src/lib/wallet';
+import type { ParanoidProvider } from '../../src/lib/window';
 import {
     buildInstructionTree,
     replaceRecentBlockhash,
     setupBackground,
     transactionLines,
     transactionMessageBase64,
-} from './background';
-import * as keypairs from './keypairs';
+} from '../../src/extension/background';
+import * as keypairs from '../../src/extension/keypairs';
 
 const payer = Keypair.generate();
 const cosigner = Keypair.generate();
