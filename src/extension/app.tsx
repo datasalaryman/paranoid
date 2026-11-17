@@ -1486,6 +1486,9 @@ function useImportKeypair() {
 
 function ApprovalPage() {
     const { id } = approvalRoute.useSearch();
+    const queryClient = useQueryClient();
+    const [blockhashRefreshCountdown, setBlockhashRefreshCountdown] = useState(10);
+    const refreshInFlight = useRef(false);
     const request = useQuery({
         queryKey: ['approval', id],
         enabled: Boolean(id),
@@ -1500,6 +1503,35 @@ function ApprovalPage() {
             sendMessage<boolean>({ type: 'approval:resolve', id, decision: value }),
         onSuccess: () => window.close(),
     });
+    const blockhashRefresh = useMutation({
+        mutationFn: () => sendMessage<ApprovalDetails>({ type: 'approval:refresh-blockhash', id }),
+        onSuccess: (details) => {
+            queryClient.setQueryData(['approval', id], details);
+            setBlockhashRefreshCountdown(10);
+        },
+        onError: (error) => showToast(`Could not refresh blockhash: ${errorMessage(error)}`, 'error'),
+        onSettled: () => {
+            refreshInFlight.current = false;
+        },
+    });
+    const canRefreshBlockhash = Boolean(request.data?.canRefreshBlockhash && request.data.transaction);
+    const blockhashRefreshProgress = blockhashRefresh.isPending ? 1 : (10 - blockhashRefreshCountdown) / 10;
+    const countdownCircleCircumference = 2 * Math.PI * 18;
+
+    useEffect(() => {
+        if (!canRefreshBlockhash || decision.isPending) return;
+        const interval = window.setInterval(() => {
+            setBlockhashRefreshCountdown((seconds) => {
+                if (seconds > 1) return seconds - 1;
+                if (!refreshInFlight.current) {
+                    refreshInFlight.current = true;
+                    blockhashRefresh.mutate();
+                }
+                return 10;
+            });
+        }, 1_000);
+        return () => window.clearInterval(interval);
+    }, [canRefreshBlockhash, decision.isPending]);
     const multipleSignerCount = request.data?.requiredSignerCount;
     const batchHasMultipleSigners = request.data?.transactions?.some(
         ({ requiredSignerCount }) => requiredSignerCount > 1
@@ -1546,10 +1578,44 @@ function ApprovalPage() {
                         : `this transaction requires ${multipleSignerCount} signatures.`}
                 </p>
             )}
+            {canRefreshBlockhash && (
+                <div className="mt-5 mb-[-1rem] flex items-center justify-end gap-2.5 text-xs text-[#b7c8ba]">
+                    <span>{blockhashRefresh.isPending ? 'Refreshing blockhash' : 'Blockhash refresh'}</span>
+                    <span
+                        className="relative inline-flex size-11 shrink-0 items-center justify-center"
+                        role="timer"
+                        aria-live="polite"
+                        aria-label={
+                            blockhashRefresh.isPending
+                                ? 'Refreshing blockhash now'
+                                : `Blockhash refreshes in ${blockhashRefreshCountdown} seconds`
+                        }
+                    >
+                        <svg className="absolute inset-0 size-11 -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
+                            <circle cx="22" cy="22" r="18" fill="none" stroke="#36433a" strokeWidth="3" />
+                            <circle
+                                cx="22"
+                                cy="22"
+                                r="18"
+                                fill="none"
+                                stroke="#68f58a"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeDasharray={countdownCircleCircumference}
+                                strokeDashoffset={countdownCircleCircumference * (1 - blockhashRefreshProgress)}
+                                className="transition-[stroke-dashoffset] duration-500 ease-linear"
+                            />
+                        </svg>
+                        <span className="font-mono text-sm font-bold text-[#e7f7e9]" aria-hidden="true">
+                            {blockhashRefresh.isPending ? '…' : blockhashRefreshCountdown}
+                        </span>
+                    </span>
+                </div>
+            )}
             <div className={`mt-6 grid ${request.data?.canSaveForLater ? 'grid-cols-3' : 'grid-cols-2'} gap-2.5`}>
                 <button
                     className={`${buttonClassName} bg-[#242b26] text-[#e7f7e9]`}
-                    disabled={!request.data || decision.isPending}
+                    disabled={!request.data || decision.isPending || blockhashRefresh.isPending}
                     onClick={() => decision.mutate('cancel')}
                 >
                     {request.data?.transaction ? 'Cancel' : 'Reject'}
@@ -1557,7 +1623,7 @@ function ApprovalPage() {
                 {request.data?.canSaveForLater && (
                     <button
                         className={secondaryButtonClassName}
-                        disabled={decision.isPending}
+                        disabled={decision.isPending || blockhashRefresh.isPending}
                         onClick={() => decision.mutate('save-for-later')}
                     >
                         Save for Later
@@ -1565,7 +1631,7 @@ function ApprovalPage() {
                 )}
                 <button
                     className={buttonClassName}
-                    disabled={!request.data || decision.isPending}
+                    disabled={!request.data || decision.isPending || blockhashRefresh.isPending}
                     onClick={() => decision.mutate('approve')}
                 >
                     {request.data?.transaction ? 'Sign' : 'Approve'}

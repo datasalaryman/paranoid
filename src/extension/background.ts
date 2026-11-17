@@ -68,7 +68,14 @@ import {
     toTransactionHistoryItem,
 } from '@/extension/transaction-history';
 
-const pendingApprovals = new Map<string, { details: ApprovalDetails; resolve: (decision: ApprovalDecision) => void }>();
+type PendingApproval = {
+    details: ApprovalDetails;
+    resolve: (decision: ApprovalDecision) => void;
+    refreshBlockhash?: () => Promise<Partial<Omit<ApprovalDetails, 'id'>>>;
+    refreshInFlight?: Promise<ApprovalDetails>;
+};
+
+const pendingApprovals = new Map<string, PendingApproval>();
 const approvalWindows = new Map<number, string>();
 let sendingSol = false;
 const MAINNET_GENESIS_HASH = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
@@ -104,26 +111,32 @@ export function setupBackground(): void {
             return;
         }
 
+        if (message?.type === 'approval:refresh-blockhash') {
+            if (!isApprovalPage(sender)) {
+                sendResponse({ __error: 'Approvals are only available from Paranoid' });
+                return;
+            }
+            refreshPendingApprovalBlockhash(message.id)
+                .then(sendResponse)
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
+        }
+
         if (message?.type === 'approval:resolve') {
             if (!isApprovalPage(sender)) {
                 sendResponse({ __error: 'Approvals are only available from Paranoid' });
                 return;
             }
-            const pending = pendingApprovals.get(message.id);
-            if (pending) {
-                pendingApprovals.delete(message.id);
-                pending.resolve(
-                    message.decision === 'save-for-later' ||
-                        message.decision === 'cancel' ||
-                        message.decision === 'approve'
-                        ? message.decision
-                        : message.approved
-                          ? 'approve'
-                          : 'cancel'
-                );
-            }
-            sendResponse(true);
-            return;
+            const decision =
+                message.decision === 'save-for-later' || message.decision === 'cancel' || message.decision === 'approve'
+                    ? message.decision
+                    : message.approved
+                      ? 'approve'
+                      : 'cancel';
+            resolvePendingApproval(message.id, decision)
+                .then(() => sendResponse(true))
+                .catch((error) => sendResponse({ __error: error instanceof Error ? error.message : String(error) }));
+            return true;
         }
 
         if (message?.type === 'wallet:send-sol') {
@@ -459,24 +472,40 @@ async function sendSol(request: {
         // Simulation checks transfer funds and fees without obtaining a signer.
         const details = await simulateTransactionDetails(connection, transaction);
         const amount = `${lamports / 1_000_000_000n}.${(lamports % 1_000_000_000n).toString().padStart(9, '0')}`;
-        const decision = await requestApproval({
-            origin: chrome.runtime.getURL(''),
-            title: 'Send SOL',
-            lines: [
-                `Recipient: ${recipient.toBase58()}`,
-                `Amount: ${amount} SOL`,
-                `Fee payer: ${publicKey}`,
-                `RPC: ${rpc.name}`,
-            ],
-            ...details,
-            transactionMessage: transactionMessageBase64(transaction),
-            transaction: true,
-            canSaveForLater: false,
-        });
+        const approvalLines = [
+            `Recipient: ${recipient.toBase58()}`,
+            `Amount: ${amount} SOL`,
+            `Fee payer: ${publicKey}`,
+            `RPC: ${rpc.name}`,
+        ];
+        const decision = await requestApproval(
+            {
+                origin: chrome.runtime.getURL(''),
+                title: 'Send SOL',
+                lines: approvalLines,
+                ...details,
+                transactionMessage: transactionMessageBase64(transaction),
+                transaction: true,
+                canSaveForLater: false,
+                canRefreshBlockhash: true,
+            },
+            async () => {
+                const refreshed = deserialize([...serialize(transaction)]);
+                const { blockhash: refreshedBlockhash } = await connection.getLatestBlockhash('confirmed');
+                replaceRecentBlockhash(refreshed, refreshedBlockhash);
+                const refreshedDetails = await simulateTransactionDetails(connection, refreshed);
+                replaceRecentBlockhash(transaction, refreshedBlockhash);
+                return {
+                    lines: approvalLines,
+                    ...refreshedDetails,
+                    transactionMessage: transactionMessageBase64(refreshed),
+                };
+            }
+        );
         if (decision !== 'approve') throw new Error('User cancelled the request');
         if ((await resolveRpcChain(rpc.url, rpc.kind)) !== rpc.chain)
             throw new Error('The active RPC changed clusters');
-        if (!(await connection.isBlockhashValid(blockhash, { commitment: 'confirmed' })).value) {
+        if (!(await connection.isBlockhashValid(recentBlockhash(transaction), { commitment: 'confirmed' })).value) {
             throw new Error('Send SOL transaction expired. Review and approve a new request');
         }
         const [currentAccount, currentRpc] = await Promise.all([getActiveKeypair(), getActiveRpc()]);
@@ -544,7 +573,6 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 await approveOrSaveTransactionForLater(
                     origin,
                     transaction,
-                    bytes,
                     'signTransaction',
                     undefined,
                     keypair,
@@ -569,19 +597,42 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 }
                 const canSaveForLater =
                     Boolean(connection) && reviews.every(({ requiredSignerCount }) => requiredSignerCount === 1);
-                const decision = await requestApproval({
-                    origin,
-                    title: 'Sign multiple transactions?',
-                    lines: [
-                        `${transactions.length} transactions`,
-                        ...(canSaveForLater
-                            ? ['Save for Later keeps each transaction as a separate signing request.']
-                            : []),
-                    ],
-                    transaction: true,
-                    canSaveForLater,
-                    transactions: reviews,
-                });
+                const approvalLines = [
+                    `${transactions.length} transactions`,
+                    ...(canSaveForLater
+                        ? ['Save for Later keeps each transaction as a separate signing request.']
+                        : []),
+                ];
+                const decision = await requestApproval(
+                    {
+                        origin,
+                        title: 'Sign multiple transactions?',
+                        lines: approvalLines,
+                        transaction: true,
+                        canSaveForLater,
+                        canRefreshBlockhash: canSaveForLater,
+                        transactions: reviews,
+                    },
+                    connection && canSaveForLater
+                        ? async () => {
+                              const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                              const refreshedTransactions = transactions.map((transaction) => {
+                                  const refreshed = deserialize([...serialize(transaction)]);
+                                  replaceRecentBlockhash(refreshed, blockhash);
+                                  return refreshed;
+                              });
+                              const refreshedReviews: TransactionReview[] = [];
+                              for (const [index, transaction] of refreshedTransactions.entries()) {
+                                  refreshedReviews.push({
+                                      title: reviews[index]!.title,
+                                      ...(await reviewTransaction(transaction, rpc, connection, false)),
+                                  });
+                              }
+                              transactions.forEach((transaction) => replaceRecentBlockhash(transaction, blockhash));
+                              return { lines: approvalLines, transactions: refreshedReviews };
+                          }
+                        : undefined
+                );
                 if (decision === 'save-for-later') {
                     if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
                     if (!canSaveForLater) {
@@ -596,7 +647,7 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                             lines: review.lines,
                             balanceChanges: review.balanceChanges,
                             instructionTree: review.instructionTree,
-                            transaction: bytes[index]!,
+                            transaction: [...serialize(transactions[index]!)],
                             method: 'signTransaction',
                         }))
                     );
@@ -617,7 +668,6 @@ async function handleProviderRequest(request: ProviderRequest, sender: chrome.ru
                 await approveOrSaveTransactionForLater(
                     origin,
                     transaction,
-                    bytes,
                     'signAndSendTransaction',
                     options,
                     keypair,
@@ -764,7 +814,6 @@ async function requireApproval(origin: string, title: string, lines: string[]): 
 async function approveOrSaveTransactionForLater(
     origin: string,
     transaction: Transaction | VersionedTransaction,
-    bytes: number[],
     method: SavedTransactionMethod,
     options: SendOptions | undefined,
     keypair: Keypair,
@@ -777,17 +826,31 @@ async function approveOrSaveTransactionForLater(
         rpc,
         connection
     );
-    const decision = await requestApproval({
-        origin,
-        title,
-        lines,
-        transaction: true,
-        canSaveForLater: Boolean(connection) && requiredSignerCount === 1,
-        balanceChanges,
-        instructionTree,
-        transactionMessage,
-        requiredSignerCount,
-    });
+    const canRefreshBlockhash = Boolean(connection) && requiredSignerCount === 1;
+    const decision = await requestApproval(
+        {
+            origin,
+            title,
+            lines,
+            transaction: true,
+            canSaveForLater: canRefreshBlockhash,
+            canRefreshBlockhash,
+            balanceChanges,
+            instructionTree,
+            transactionMessage,
+            requiredSignerCount,
+        },
+        connection && canRefreshBlockhash
+            ? async () => {
+                  const refreshed = deserialize([...serialize(transaction)]);
+                  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                  replaceRecentBlockhash(refreshed, blockhash);
+                  const review = await reviewTransaction(refreshed, rpc, connection);
+                  replaceRecentBlockhash(transaction, blockhash);
+                  return review;
+              }
+            : undefined
+    );
     if (decision === 'approve') return;
     if (decision === 'save-for-later') {
         if (!connection) throw new Error('Saving transactions is unavailable in Sign Only mode');
@@ -800,7 +863,7 @@ async function approveOrSaveTransactionForLater(
             lines,
             balanceChanges,
             instructionTree,
-            transaction: [...bytes],
+            transaction: [...serialize(transaction)],
             method,
             options,
         });
@@ -972,10 +1035,13 @@ export function calculateSolBalanceChanges(
     }));
 }
 
-async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<ApprovalDecision> {
+async function requestApproval(
+    details: Omit<ApprovalDetails, 'id'>,
+    refreshBlockhash?: PendingApproval['refreshBlockhash']
+): Promise<ApprovalDecision> {
     const id = crypto.randomUUID();
     const decision = new Promise<ApprovalDecision>((resolve) => {
-        pendingApprovals.set(id, { details: { ...details, id }, resolve });
+        pendingApprovals.set(id, { details: { ...details, id }, resolve, refreshBlockhash });
     });
     const approvalWindow = await chrome.windows.create({
         url: chrome.runtime.getURL(`approval.html?id=${encodeURIComponent(id)}`),
@@ -986,6 +1052,37 @@ async function requestApproval(details: Omit<ApprovalDetails, 'id'>): Promise<Ap
     });
     if (approvalWindow.id !== undefined) approvalWindows.set(approvalWindow.id, id);
     return decision;
+}
+
+async function refreshPendingApprovalBlockhash(id: unknown): Promise<ApprovalDetails> {
+    if (typeof id !== 'string' || !id) throw new Error('Approval request is required');
+    const pending = pendingApprovals.get(id);
+    if (!pending) throw new Error('This request expired');
+    if (!pending.refreshBlockhash) throw new Error('Blockhash refresh is unavailable for this request');
+    if (pending.refreshInFlight) return pending.refreshInFlight;
+
+    const refresh = pending
+        .refreshBlockhash()
+        .then((details) => {
+            if (pendingApprovals.get(id) !== pending) throw new Error('This request expired');
+            pending.details = { ...pending.details, ...details, id };
+            return pending.details;
+        })
+        .finally(() => {
+            if (pending.refreshInFlight === refresh) pending.refreshInFlight = undefined;
+        });
+    pending.refreshInFlight = refresh;
+    return refresh;
+}
+
+async function resolvePendingApproval(id: unknown, decision: ApprovalDecision): Promise<void> {
+    if (typeof id !== 'string' || !id) return;
+    const pending = pendingApprovals.get(id);
+    if (!pending) return;
+    if (pending.refreshInFlight) await pending.refreshInFlight;
+    if (pendingApprovals.get(id) !== pending) return;
+    pendingApprovals.delete(id);
+    pending.resolve(decision);
 }
 
 async function getActiveSavedTransactionSummaries(): Promise<SavedTransactionSummary[]> {
