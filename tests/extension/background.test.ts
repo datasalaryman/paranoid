@@ -2,6 +2,7 @@ import { describe, expect, test, spyOn } from 'bun:test';
 import {
     Keypair,
     Connection,
+    Message,
     PublicKey,
     SystemProgram,
     Transaction,
@@ -25,6 +26,7 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
     const payer = Keypair.generate();
     const recipient = Keypair.generate().publicKey;
     const blockhash = Keypair.generate().publicKey.toBase58();
+    const refreshedBlockhash = Keypair.generate().publicKey.toBase58();
     const account = {
         name: 'payer',
         publicKey: payer.publicKey.toBase58(),
@@ -110,7 +112,7 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
             expect((await send({ type: 'approval:get', id: 'test' }, from)).__error).toBeString();
         }
         for (const from of [tab, { id: 'other', url: sender.url }, { id: sender.id, url: 'https://evil.example' }]) {
-            for (const type of ['wallet:send-sol', 'approval:get', 'approval:resolve']) {
+            for (const type of ['wallet:send-sol', 'approval:get', 'approval:refresh-blockhash', 'approval:resolve']) {
                 expect((await send({ ...request, type, decision: 'approve' }, from)).__error).toContain(
                     'only available from Paranoid'
                 );
@@ -166,8 +168,13 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
             expect(signer).not.toHaveBeenCalled();
             expect(signing).not.toHaveBeenCalled();
             expect((await send(request)).__error).toContain('already in progress');
-            const details = await send({ type: 'approval:get', id: approvalId }, approvalSender);
-            expect(details).toMatchObject({ title: 'Send SOL', transaction: true, canSaveForLater: false });
+            let details = await send({ type: 'approval:get', id: approvalId }, approvalSender);
+            expect(details).toMatchObject({
+                title: 'Send SOL',
+                transaction: true,
+                canSaveForLater: false,
+                canRefreshBlockhash: true,
+            });
             expect(details.lines).toContain(`Recipient: ${recipient.toBase58()}`);
             expect(details.lines).toContain(`RPC: ${rpc.name}`);
             expect(details.lines.some((line: string) => line.includes('solana:'))).toBe(false);
@@ -188,6 +195,15 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
                 signer.mockResolvedValueOnce({ publicKey: other.publicKey, secretKey: secret } as Keypair);
             }
             if (scenario === 'send-error') broadcast.mockRejectedValueOnce(new Error('Preflight failed'));
+            if (scenario === 'success') {
+                const previousMessage = details.transactionMessage;
+                latest.mockResolvedValueOnce({ blockhash: refreshedBlockhash, lastValidBlockHeight: 200 });
+                details = await send({ type: 'approval:refresh-blockhash', id: approvalId }, approvalSender);
+                expect(details.transactionMessage).not.toBe(previousMessage);
+                expect(Message.from(Buffer.from(details.transactionMessage, 'base64')).recentBlockhash).toBe(
+                    refreshedBlockhash
+                );
+            }
             await send(
                 {
                     type: 'approval:resolve',
@@ -206,7 +222,7 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
                     const [bytes, options] = broadcast.mock.calls[0]!;
                     const transaction = Transaction.from(bytes);
                     expect(transaction.verifySignatures()).toBe(true);
-                    expect(transaction.recentBlockhash).toBe(blockhash);
+                    expect(transaction.recentBlockhash).toBe(refreshedBlockhash);
                     expect(transactionMessageBase64(transaction)).toBe(details.transactionMessage);
                     expect(options).toEqual({ skipPreflight: false, preflightCommitment: 'confirmed' });
                 } else expect(response.__error).toBe('Preflight failed');
@@ -224,7 +240,7 @@ test('Send SOL restricts senders and signs only approved, unexpired transactions
         signer.mockClear();
         expect((await send(request)).__error).toContain('insufficient funds');
         expect(signer).not.toHaveBeenCalled();
-        expect(latest).toHaveBeenCalledTimes(12);
+        expect(latest).toHaveBeenCalledTimes(13);
     } finally {
         if (pendingResult) {
             listener!(

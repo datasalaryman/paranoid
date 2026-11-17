@@ -22,6 +22,7 @@ export interface ApprovalDetails {
     lines: string[];
     transaction?: boolean;
     canSaveForLater?: boolean;
+    canRefreshBlockhash?: boolean;
     balanceChanges?: SolBalanceChange[];
     instructionTree?: InstructionTreeNode[];
     transactionMessage?: string;
